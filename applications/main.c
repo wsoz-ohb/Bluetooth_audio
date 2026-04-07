@@ -19,7 +19,7 @@ int main(void)
     bt__init();
     while(1)
     {
-
+        
         rt_thread_mdelay(10);
     }
 

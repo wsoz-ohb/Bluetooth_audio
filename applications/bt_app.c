@@ -16,8 +16,7 @@
 #include <rtdbg.h>
 
 static bt_app_common_cb_t g_common_cb;
-static bt_app_hid_cb_t g_hid_cb;
-static bt_app_spp_cb_t g_spp_cb;
+static bt_app_a2dp_cb_t g_a2dp_cb;
 bt_app_cb_t bt_app_cb = {0};
 rt_thread_t timer_polling_thread = RT_NULL;
 static rt_mutex_t g_bt_stack_lock = RT_NULL;
@@ -96,6 +95,47 @@ static void bt_hardware_error_app(uint8_t reason)
     /* 建议：这里仅置标志，在工作线程里执行 bt_stop()/bt_start() 做重启恢复 */
 }
 
+//a2dp cb
+static void bt_a2dp_signal_connect(struct bd_addr_t *remote_addr,uint8_t status)
+{
+
+}
+
+void bt_a2dp_signal_disconnect(struct bd_addr_t *remote_addr,uint8_t status)
+{
+
+}
+
+void bt_a2dp_stream_connect(struct bd_addr_t *remote_addr,uint8_t status)
+{
+
+}
+
+void bt_a2dp_stream_disconnect(struct bd_addr_t *remote_addr,uint8_t status)
+{
+
+}
+
+void bt_a2dp_start(struct bd_addr_t *remote_addr,uint8_t value)
+{
+
+}
+
+void bt_a2dp_relase(struct bd_addr_t *remote_addr,uint8_t value)
+{
+
+}
+
+void bt_a2dp_suspend(struct bd_addr_t *remote_addr,uint8_t value)
+{
+
+}
+
+void bt_a2dp_abort(struct bd_addr_t *remote_addr,uint8_t value)
+{
+
+}
+
 static void bt_timer(void *parameter)
 {
     rt_tick_t last_1s = rt_tick_get();
@@ -144,9 +184,18 @@ rt_err_t bt__init(void)
     g_common_cb.bt_inquiry_status = bt_inquiry_status;
     g_common_cb.bt_inquiry_result = bt_inquiry_result;
 
+    g_a2dp_cb.bt_a2dp_abort=&bt_a2dp_abort;
+    g_a2dp_cb.bt_a2dp_relase=&bt_a2dp_relase;
+    g_a2dp_cb.bt_a2dp_signal_connect=&bt_a2dp_signal_connect;
+    g_a2dp_cb.bt_a2dp_signal_disconnect=&bt_a2dp_signal_disconnect;
+    g_a2dp_cb.bt_a2dp_start=&bt_a2dp_start;
+    g_a2dp_cb.bt_a2dp_stream_connect=&bt_a2dp_stream_connect;
+    g_a2dp_cb.bt_a2dp_stream_disconnect=&bt_a2dp_stream_disconnect;
+    g_a2dp_cb.bt_a2dp_suspend=&bt_a2dp_suspend;
+
     bt_app_cb.app_common_cb = &g_common_cb;
-    bt_app_cb.app_hid_cb = &g_hid_cb;
-    bt_app_cb.app_spp_cb = &g_spp_cb;
+    bt_app_cb.app_a2dp_cb = &g_a2dp_cb;
+
 
     if (bt_stack_lock_take() != RT_EOK)
     {
