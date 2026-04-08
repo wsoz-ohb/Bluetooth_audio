@@ -28,6 +28,7 @@ static btstack_context_callback_registration_t btstack_port_power_on_registratio
 
 static void btstack_port_thread_entry(void * parameter){
     UNUSED(parameter);
+    // BTstack expects all timers/callbacks to be driven from its run loop thread.
     btstack_run_loop_execute();
 }
 
@@ -49,9 +50,11 @@ int btstack_port_init(const btstack_chipset_t * chipset_driver){
     }
 
     if (effective_chipset == NULL){
+        // Current board uses an ESP32 controller on H4, so default to that chipset helper.
         effective_chipset = btstack_chipset_esp32_instance();
     }
 
+    // Set up the OS-facing pieces first, then hand BTstack the UART/chipset pair.
     btstack_run_loop_init(btstack_run_loop_embedded_get_instance());
     btstack_tlv_set_instance(btstack_tlv_none_init_instance(), NULL);
 
@@ -60,9 +63,11 @@ int btstack_port_init(const btstack_chipset_t * chipset_driver){
     }
 
 #if BT_CFG_ENABLE_CLASSIC
+    // Link keys are kept in RAM for now; switch this later if persistent storage is needed.
     hci_set_link_key_db(btstack_link_key_db_memory_instance());
 #endif
 
+    // This stage only prepares the stack and local device settings. No HCI power-on yet.
     bt_host_protocol_init();
     bt_host_apply_device_config();
 #if BT_CFG_ENABLE_BLE
@@ -100,6 +105,7 @@ int btstack_port_start_thread(void){
         return err;
     }
 
+    // Power-on is queued onto the BTstack run loop so controller startup happens in the same context.
     btstack_port_power_on_registration.item = NULL;
     btstack_port_power_on_registration.callback = btstack_port_power_on;
     btstack_port_power_on_registration.context = NULL;
@@ -111,3 +117,4 @@ int btstack_port_start_thread(void){
 rt_thread_t btstack_port_get_thread(void){
     return btstack_port_thread;
 }
+

@@ -9,7 +9,9 @@
 extern "C" {
 #endif
 
+// Prepare the BTstack core, transport, and basic device settings.
 int btstack_port_init(const btstack_chipset_t * chipset_driver);
+// Start the BTstack thread and schedule HCI power-on from the run loop context.
 int btstack_port_start_thread(void);
 rt_thread_t btstack_port_get_thread(void);
 
@@ -18,3 +20,4 @@ rt_thread_t btstack_port_get_thread(void);
 #endif
 
 #endif /* BTSTACK_PORT_H */
+
