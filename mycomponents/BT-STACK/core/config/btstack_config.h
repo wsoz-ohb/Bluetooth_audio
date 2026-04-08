@@ -35,6 +35,7 @@
 // ---------------------------------------------------------------------------
 #if BT_CFG_ENABLE_CLASSIC
 #define ENABLE_CLASSIC
+#define ENABLE_EXPLICIT_CONNECTABLE_MODE_CONTROL
 #endif
 
 #if BT_CFG_ENABLE_BLE

@@ -79,9 +79,10 @@
 #define BT_CFG_CLASS_OF_DEVICE                     0x240414u
 
 // ---------------------------------------------------------------------------
-// Classic 可发现 / 配对参数
+// Classic 可发现 / 可连接 / 配对参数
 // ---------------------------------------------------------------------------
 #define BT_CFG_CLASSIC_DISCOVERABLE                1
+#define BT_CFG_CLASSIC_CONNECTABLE                 1
 #define BT_CFG_CLASSIC_SSP_IO_CAPABILITY           SSP_IO_CAPABILITY_NO_INPUT_NO_OUTPUT
 #define BT_CFG_CLASSIC_SSP_AUTHREQ                 SSP_IO_AUTHREQ_MITM_PROTECTION_NOT_REQUIRED_GENERAL_BONDING
 

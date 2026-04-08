@@ -1,5 +1,10 @@
 # BTstack Host 协议栈提取说明
 
+更完整的当前工程移植说明见：
+
+- [../README.md](../README.md)
+- [../USAGE.md](../USAGE.md)
+
 这个目录是从当前仓库的 `src/` 中提取出来的一份“便于移植”的 Host 协议栈副本，原始源码没有被移动。
 
 当前版本已经进一步裁剪为只保留 `H4` 传输相关内容。
@@ -193,5 +198,6 @@ static void app_bt_init(void){
   去掉 `ENABLE_BLE`
 - 双模：
   三部分都保留
+
 
 

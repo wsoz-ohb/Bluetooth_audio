@@ -97,6 +97,7 @@ void bt_host_apply_device_config(void){
     }
     gap_ssp_set_io_capability(BT_CFG_CLASSIC_SSP_IO_CAPABILITY);
     gap_ssp_set_authentication_requirement(BT_CFG_CLASSIC_SSP_AUTHREQ);
+    gap_connectable_control(BT_CFG_CLASSIC_CONNECTABLE);
     gap_discoverable_control(BT_CFG_CLASSIC_DISCOVERABLE);
 #endif
 }
