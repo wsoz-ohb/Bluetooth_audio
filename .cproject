@@ -72,14 +72,22 @@
                   <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}/.}&quot;" />
                   <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}/applications}&quot;" />
                   <listOptionValue builtIn="false" value="&quot;${workspace_loc:/Bluetooth_audio/mycomponents/keyboard/inc}&quot;" />
-                  <listOptionValue builtIn="false" value="&quot;${workspace_loc:/Bluetooth_audio/mycomponents/Bluetooth_HostStack}&quot;" />
-                  <listOptionValue builtIn="false" value="&quot;${workspace_loc:/Bluetooth_audio/mycomponents/Bluetooth_HostStack/src/include}&quot;" />
-                  <listOptionValue builtIn="false" value="&quot;${workspace_loc:/Bluetooth_audio/mycomponents/Bluetooth_HostStack/src/include/ble}&quot;" />
-                  <listOptionValue builtIn="false" value="&quot;${workspace_loc:/Bluetooth_audio/mycomponents/Bluetooth_HostStack/src/include/classical}&quot;" />
-                  <listOptionValue builtIn="false" value="&quot;${workspace_loc:/Bluetooth_audio/mycomponents/Bluetooth_HostStack/vendor}&quot;" />
-                  <listOptionValue builtIn="false" value="&quot;${workspace_loc:/Bluetooth_audio/mycomponents/Bluetooth_HostStack/wrapper}&quot;" />
-                  <listOptionValue builtIn="false" value="&quot;${workspace_loc:/Bluetooth_device/mycomponents/Bluetooth_HostStack/third_party_lib/crypto/include}&quot;" />
-                  <listOptionValue builtIn="false" value="&quot;${workspace_loc:/Bluetooth_audio/mycomponents/Bluetooth_HostStack/third_party_lib/sbc/sbc}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc:/Bluetooth_audio/mycomponents/BT-STACK/core/config}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc:/Bluetooth_audio/mycomponents/BT-STACK/core/inc}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc:/Bluetooth_audio/mycomponents/BT-STACK/core/classic/inc}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc:/Bluetooth_audio/mycomponents/BT-STACK/core/classic/inc/classic}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc:/Bluetooth_audio/mycomponents/BT-STACK/core/ble/inc}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc:/Bluetooth_audio/mycomponents/BT-STACK/core/ble/inc/ble}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc:/Bluetooth_audio/mycomponents/BT-STACK/core/ble/inc/ble/gatt-service}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc:/Bluetooth_audio/mycomponents/BT-STACK/port}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc:/Bluetooth_audio/mycomponents/BT-STACK/3rd-party/bluedroid/decoder/include}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc:/Bluetooth_audio/mycomponents/BT-STACK/3rd-party/bluedroid/encoder/include}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc:/Bluetooth_audio/mycomponents/BT-STACK/3rd-party/md5}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc:/Bluetooth_audio/mycomponents/BT-STACK/3rd-party/micro-ecc}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc:/Bluetooth_audio/mycomponents/BT-STACK/3rd-party/rijndael}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc:/Bluetooth_audio/mycomponents/BT-STACK/3rd-party/yxml}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc:/Bluetooth_audio/mycomponents/BT-STACK/3rd-party/lc3-google/include}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc:/Bluetooth_audio/mycomponents/BT-STACK/3rd-party/stb}&quot;" />
                   <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//.}&quot;" />
                   <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//cubemx/Inc}&quot;" />
                   <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//cubemx}&quot;" />

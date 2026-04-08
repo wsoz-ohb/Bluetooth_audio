@@ -9,7 +9,7 @@
  */
 #ifndef APPLICATIONS_BT_APP_H_
 #define APPLICATIONS_BT_APP_H_
-#include "bt_wrapper.h"
+
 #include <rtthread.h>
 
 rt_err_t bt__init(void);
