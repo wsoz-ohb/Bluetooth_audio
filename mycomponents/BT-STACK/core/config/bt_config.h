@@ -125,6 +125,8 @@
 #define BT_CFG_MAX_NR_RFCOMM_SERVICES              1
 #define BT_CFG_MAX_NR_RFCOMM_CHANNELS              1
 #define BT_CFG_MAX_NR_SERVICE_RECORD_ITEMS         8
+#define BT_CFG_MAX_NR_AVDTP_STREAM_ENDPOINTS      1
+#define BT_CFG_MAX_NR_AVDTP_CONNECTIONS           1
 
 #define BT_CFG_MAX_NR_GATT_CLIENTS                 1
 #define BT_CFG_MAX_NR_SM_LOOKUP_ENTRIES            3
@@ -140,6 +142,7 @@
 #endif
 
 #endif // BT_CONFIG_H
+
 
 
 
