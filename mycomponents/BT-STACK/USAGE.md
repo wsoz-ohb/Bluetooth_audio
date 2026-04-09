@@ -112,6 +112,122 @@ rt_err_t bt__init(void){
 
 如果以后你想完全手工选 codec 配置，再考虑打开 `ENABLE_A2DP_EXPLICIT_CONFIG` 这种高级模式。
 
+## A2DP 启动流转图
+
+下面这部分不讲协议理论，只讲“在当前工程里，代码会怎么走”。
+
+### A2DP 通用接法
+
+```text
+[applications/bt_app.c]
+bt__init()
+    -> btstack_port_init(NULL)
+       先把基础 Host 栈准备好
+    -> a2dp_xxx_init()
+       选择 Source 或 Sink
+    -> a2dp_xxx_register_packet_handler()
+       注册 A2DP/AVDTP 事件回调
+    -> 如果是 Sink:
+       a2dp_sink_register_media_handler()
+       注册媒体数据接收回调
+    -> a2dp_xxx_create_stream_endpoint()
+       创建本地 SEP，声明自己支持什么 codec/capability
+    -> a2dp_xxx_create_sdp_record()
+       生成 SDP 服务记录
+    -> sdp_register_service()
+       把 SDP 服务发布出去
+    -> btstack_port_start_thread()
+       启动线程并上电
+
+[协议栈启动后]
+HCI_POWER_ON
+    -> GAP 进入可发现/可连接状态
+    -> 远端设备发现你并查询 SDP
+    -> 建立 AVDTP signaling channel
+    -> A2DP_SUBEVENT_SIGNALING_CONNECTION_ESTABLISHED
+    -> A2DP_SUBEVENT_STREAM_ESTABLISHED
+    -> A2DP_SUBEVENT_STREAM_STARTED
+    -> Sink: media_handler() 开始收到音频
+    -> Source: 等 CAN_SEND_NOW 事件后开始发音频
+```
+
+这张图里最关键的是两点：
+
+- `btstack_port_start_thread()` 之前，做完 profile 初始化、SEP 创建、SDP 注册。
+- `btstack_port_start_thread()` 之后，就进入事件驱动模式，不再是顺序执行思维。
+
+### A2DP Sink 典型流转图
+
+适合“手机给你的设备推音频”。
+
+```text
+本地设备作为 Sink
+    -> a2dp_sink_init()
+    -> a2dp_sink_register_packet_handler()
+    -> a2dp_sink_register_media_handler()
+    -> a2dp_sink_create_stream_endpoint()
+    -> a2dp_sink_create_sdp_record()
+    -> sdp_register_service()
+    -> btstack_port_start_thread()
+    -> 等手机发现你
+    -> 手机查询 SDP，确认你支持 A2DP Sink
+    -> 手机发起 AVDTP signaling 连接
+    -> A2DP_SUBEVENT_SIGNALING_CONNECTION_ESTABLISHED
+    -> A2DP_SUBEVENT_STREAM_ESTABLISHED
+    -> A2DP_SUBEVENT_STREAM_STARTED
+    -> a2dp_sink_media_handler(local_seid, packet, size)
+    -> 你在 media_handler 里做 SBC 处理或送音频链路
+```
+
+### A2DP Source 典型流转图
+
+适合“你本地编码后往耳机/音箱发音频”。
+
+```text
+本地设备作为 Source
+    -> a2dp_source_init()
+    -> a2dp_source_register_packet_handler()
+    -> a2dp_source_create_stream_endpoint()
+    -> a2dp_source_create_sdp_record()
+    -> sdp_register_service()
+    -> btstack_port_start_thread()
+    -> 等 HCI_EVENT_STATE == HCI_STATE_WORKING
+    -> a2dp_source_establish_stream(remote_addr, &a2dp_cid)
+    -> A2DP_SUBEVENT_SIGNALING_CONNECTION_ESTABLISHED
+    -> A2DP_SUBEVENT_STREAM_ESTABLISHED
+    -> a2dp_source_start_stream(a2dp_cid, local_seid)
+    -> A2DP_SUBEVENT_STREAM_STARTED
+    -> A2DP_SUBEVENT_STREAMING_CAN_SEND_MEDIA_PACKET_NOW
+    -> a2dp_source_stream_send_media_payload_rtp(...) 或 send_media_packet(...)
+    -> 继续请求 can send now
+    -> 循环发音频
+```
+
+### 你可以按这个顺序理解 A2DP
+
+```text
+基础栈先启动
+    -> profile 先注册
+    -> SDP 先发布
+    -> SEP 先创建
+    -> 上电
+    -> 远端发现/连接
+    -> AVDTP 协商
+    -> stream 建立
+    -> stream started
+    -> 真正开始收发音频
+```
+
+如果你后面要看代码，优先盯住这几个点：
+
+- `a2dp_xxx_init()`
+- `a2dp_xxx_register_packet_handler()`
+- `a2dp_xxx_create_stream_endpoint()`
+- `a2dp_xxx_create_sdp_record()`
+- `sdp_register_service()`
+- `A2DP_SUBEVENT_*`
+- `a2dp_sink_media_handler()` 或 `A2DP_SUBEVENT_STREAMING_CAN_SEND_MEDIA_PACKET_NOW`
+
 ## 最小 A2DP Sink 用法
 
 适用场景：
@@ -427,3 +543,4 @@ a2dp_source_stream_send_media_payload_rtp(
 4. 它的数据面是“事件回调”还是“媒体/报告/通知回调”
 
 如果这 4 个点你能迅速说清楚，这个 profile 基本就能接起来了。
+

@@ -28,15 +28,16 @@ static btstack_context_callback_registration_t btstack_port_power_on_registratio
 
 static void btstack_port_thread_entry(void * parameter){
     UNUSED(parameter);
-    // BTstack expects all timers/callbacks to be driven from its run loop thread.
+    // BTstack 的定时器、回调和数据源轮询都依赖这个 run loop 线程驱动。
     btstack_run_loop_execute();
 }
 
+//启动协议栈
 static void btstack_port_power_on(void * context){
     int err;
     UNUSED(context);
 
-    err = bt_host_start();
+    err = bt_host_start();  //依赖
     if (err != 0){
         log_error("btstack_port: bt_host_start failed, err %d", err);
     }
@@ -50,11 +51,11 @@ int btstack_port_init(const btstack_chipset_t * chipset_driver){
     }
 
     if (effective_chipset == NULL){
-        // Current board uses an ESP32 controller on H4, so default to that chipset helper.
+        // 当前板级默认外挂的是 ESP32 控制器，并且走 H4 UART，因此这里使用 ESP32 的 chipset 适配。
         effective_chipset = btstack_chipset_esp32_instance();
     }
 
-    // Set up the OS-facing pieces first, then hand BTstack the UART/chipset pair.
+    // 先把 OS 相关的 run loop/TLV 准备好，再把 UART 和 chipset 驱动交给 Host 层。
     btstack_run_loop_init(btstack_run_loop_embedded_get_instance());
     btstack_tlv_set_instance(btstack_tlv_none_init_instance(), NULL);
 
@@ -63,11 +64,11 @@ int btstack_port_init(const btstack_chipset_t * chipset_driver){
     }
 
 #if BT_CFG_ENABLE_CLASSIC
-    // Link keys are kept in RAM for now; switch this later if persistent storage is needed.
+    // 当前 Link Key 只放在 RAM 里，后面如果要掉电保存，再切到持久化实现。
     hci_set_link_key_db(btstack_link_key_db_memory_instance());
 #endif
 
-    // This stage only prepares the stack and local device settings. No HCI power-on yet.
+    // 这里只做协议栈和本地设备参数准备，还没有真正让控制器上电。
     bt_host_protocol_init();
     bt_host_apply_device_config();
 #if BT_CFG_ENABLE_BLE
@@ -105,7 +106,7 @@ int btstack_port_start_thread(void){
         return err;
     }
 
-    // Power-on is queued onto the BTstack run loop so controller startup happens in the same context.
+    // 把上电动作投递到 run loop 线程里执行，避免控制器启动发生在错误的线程上下文。
     btstack_port_power_on_registration.item = NULL;
     btstack_port_power_on_registration.callback = btstack_port_power_on;
     btstack_port_power_on_registration.context = NULL;
@@ -117,4 +118,5 @@ int btstack_port_start_thread(void){
 rt_thread_t btstack_port_get_thread(void){
     return btstack_port_thread;
 }
+
 

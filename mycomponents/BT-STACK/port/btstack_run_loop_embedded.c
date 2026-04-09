@@ -11,14 +11,14 @@ static rt_bool_t btstack_run_loop_sem_inited = RT_FALSE;
 static volatile rt_bool_t btstack_run_loop_exit_requested = RT_FALSE;
 
 static void btstack_run_loop_embedded_notify(void){
-    // Wake the run loop whenever a timer, callback, or data source state changes.
+    // 定时器、回调队列或数据源状态变化后，都通过信号量把 run loop 唤醒。
     if (btstack_run_loop_sem_inited){
         (void) rt_sem_release(&btstack_run_loop_sem);
     }
 }
 
 static void btstack_run_loop_embedded_init(void){
-    // Initialize the common BTstack lists first, then the RT-Thread wakeup primitive.
+    // 先初始化 BTstack 公共链表和定时器基类，再准备 RT-Thread 的唤醒信号量。
     btstack_run_loop_base_init();
 
     if (!btstack_run_loop_sem_inited){
@@ -91,7 +91,7 @@ static void btstack_run_loop_embedded_execute(void){
         int32_t timeout_ms;
         rt_tick_t timeout_tick;
 
-        // Keep the same order as the reference embedded run loop: callbacks, I/O, then timers.
+        // 顺序保持和 BTstack 参考实现一致：先回调，再轮询数据源，最后处理超时定时器。
         btstack_run_loop_base_execute_callbacks();
         btstack_run_loop_base_poll_data_sources();
         btstack_run_loop_base_process_timers(btstack_run_loop_embedded_get_time_ms());
@@ -102,17 +102,17 @@ static void btstack_run_loop_embedded_execute(void){
 
         timeout_ms = btstack_run_loop_base_get_time_until_timeout(btstack_run_loop_embedded_get_time_ms());
         if (timeout_ms == 0){
-            // A timer is already due, so spin once more without sleeping.
+            // 已经有定时器到期，立刻进入下一轮，不需要睡眠。
             continue;
         }
 
         if (timeout_ms < 0){
-            // No timer is pending; sleep until some other part of the stack wakes us.
+            // 当前没有等待中的定时器，直接睡眠，直到其他上下文把 run loop 唤醒。
             (void) rt_sem_take(&btstack_run_loop_sem, RT_WAITING_FOREVER);
             continue;
         }
 
-        // Sleep until the next timer expires or an external wakeup arrives first.
+        // 最多睡到下一个定时器超时；如果中途有外部事件，也会提前被唤醒。
         timeout_tick = rt_tick_from_millisecond(timeout_ms);
         if (timeout_tick == 0){
             timeout_tick = 1;
@@ -141,4 +141,5 @@ const btstack_run_loop_t btstack_run_loop_embedded = {
 const btstack_run_loop_t * btstack_run_loop_embedded_get_instance(void){
     return &btstack_run_loop_embedded;
 }
+
 

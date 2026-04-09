@@ -81,19 +81,69 @@
 
 ## 当前工程里的启动路径
 
-当前工程不是直接在应用层手工调用 `hci_init()` / `l2cap_init()`，而是走下面这条路径：
+当前工程不是在应用层手工一条条调用 `hci_init()`、`l2cap_init()`、`sdp_init()`，而是已经整理成一条固定启动链路。
 
-1. [applications/main.c](../applications/main.c) 调 `bt__init()`
-2. [applications/bt_app.c](../applications/bt_app.c) 调 `btstack_port_init(NULL)`
-3. [port/btstack_port.c](./port/btstack_port.c) 内部完成：
-   - run loop 初始化
-   - TLV 初始化
-   - `bt_host_stack_init()`
-   - `bt_host_protocol_init()`
-   - `bt_host_apply_device_config()`
-4. 再由 `btstack_port_start_thread()` 启动线程并上电
+### 启动流转图
 
-对你来说，最重要的一点是：
+```text
+[applications/main.c]
+main()
+    -> bt__init()
+
+[applications/bt_app.c]
+bt__init()
+    -> btstack_port_init(NULL)
+       这里只做基础栈准备，还没有真正 HCI 上电
+       这里之后最适合注册 A2DP / HID / SPP / ATT DB / SDP record
+    -> btstack_port_start_thread()
+       创建 BTstack 专用线程
+       把 btstack_port_power_on() 投递到 run loop 线程执行
+
+[port/btstack_port.c]
+btstack_port_init()
+    -> btstack_run_loop_init(btstack_run_loop_embedded_get_instance())
+       注册当前 RT-Thread 平台的 run loop
+    -> btstack_tlv_set_instance(btstack_tlv_none_init_instance(), NULL)
+       注册 TLV 存储后端，当前是 none，不做持久化
+    -> bt_host_stack_init(...)
+       接好 H4 UART / chipset / HCI 传输层
+    -> bt_host_protocol_init()
+       初始化 L2CAP / SDP / RFCOMM / SM 等基础协议
+    -> bt_host_apply_device_config()
+       应用本地名字、Class of Device、可发现/可连接、SSP IO 能力等配置
+
+btstack_port_start_thread()
+    -> rt_thread_create(..., btstack_port_thread_entry, ...)
+    -> rt_thread_startup(...)
+    -> btstack_run_loop_execute_on_main_thread(&btstack_port_power_on_registration)
+
+btstack_port_thread_entry()
+    -> btstack_run_loop_execute()
+       开始跑 BTstack 的事件循环
+
+btstack_port_power_on()
+    -> bt_host_start()
+
+[core/src/bt_host.c]
+bt_host_start()
+    -> hci_power_control(HCI_POWER_ON)
+       这里才是真正开始让控制器和 Host 状态机工作
+```
+
+### 每个文件在做什么
+
+- [applications/main.c](../applications/main.c)
+  应用主入口。目前这里只负责调用 `bt__init()` 把蓝牙栈拉起来。
+- [applications/bt_app.c](../applications/bt_app.c)
+  当前工程的蓝牙应用入口。它负责组织启动顺序，也是后续插入 `A2DP / HID / SPP / BLE GATT` 初始化的推荐位置。
+- [port/btstack_port.c](./port/btstack_port.c)
+  端口胶水层。负责把 `run loop`、`TLV`、`UART/H4`、`chipset`、基础 Host 初始化、线程启动和上电流程串起来。
+- [port/btstack_run_loop_embedded.c](./port/btstack_run_loop_embedded.c)
+  当前平台的事件循环实现。BTstack 的定时器、回调和数据源轮询都依赖它在 RT-Thread 线程里运行。
+- [core/src/bt_host.c](./core/src/bt_host.c)
+  基础 Host 封装。这里负责 `HCI/L2CAP/SDP/RFCOMM/SM` 这类底层协议初始化，以及本地设备参数应用和最终 `HCI_POWER_ON`。
+
+### 初学者最需要记住的一点
 
 - `btstack_port_init()` 之后、`btstack_port_start_thread()` 之前，是注册具体 profile 的最好时机。
 
@@ -183,3 +233,4 @@
    - [classic/a2dp_source.h](./core/classic/inc/classic/a2dp_source.h)
    - [classic/hid_device.h](./core/classic/inc/classic/hid_device.h)
    - [classic/spp_server.h](./core/classic/inc/classic/spp_server.h)
+
