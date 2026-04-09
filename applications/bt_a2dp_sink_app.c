@@ -5,6 +5,7 @@
  */
 #include "bt_a2dp_sink_app.h"
 
+#include "bt_a2dp_audio.h"
 #include "bt_config.h"
 #include "btstack_event.h"
 #include "btstack_util.h"
@@ -59,11 +60,9 @@ static uint8_t bt_app_a2dp_local_seid = 0u;
 
 static void bt_app_a2dp_sink_media_handler(uint8_t local_seid, uint8_t * packet, uint16_t size)
 {
-    // 当前这里先只把 A2DP Sink 服务注册和媒体入口占住。
-    // 后面你单独新开业务文件时，就把 SBC 解码、音频播放、缓冲队列等逻辑挪过去。
-    UNUSED(local_seid);
-    UNUSED(packet);
-    UNUSED(size);
+    // 协议层只负责把媒体包转交给音频层。
+    // 音频层会继续完成：RTP/SBC 头解析 -> SBC 解码 -> PCM 回调输出。
+    bt_a2dp_audio_process_media_packet(local_seid, packet, size);
 }
 
 static void bt_app_handle_a2dp_meta_event(uint8_t * packet)
@@ -96,6 +95,7 @@ static void bt_app_handle_a2dp_meta_event(uint8_t * packet)
     }
 
     case A2DP_SUBEVENT_SIGNALING_MEDIA_CODEC_SBC_CONFIGURATION:
+        bt_a2dp_audio_reset();
         LOG_I("A2DP SBC config: freq=%u, mode=%u, blocks=%u, subbands=%u, alloc=%u, bitpool=%u-%u",
               a2dp_subevent_signaling_media_codec_sbc_configuration_get_sampling_frequency(packet),
               a2dp_subevent_signaling_media_codec_sbc_configuration_get_channel_mode(packet),
@@ -150,6 +150,7 @@ static void bt_app_handle_a2dp_meta_event(uint8_t * packet)
         break;
 
     case A2DP_SUBEVENT_STREAM_RELEASED:
+        bt_a2dp_audio_reset();
         LOG_I("A2DP stream released, cid=0x%04x, local_seid=%u",
               a2dp_subevent_stream_released_get_a2dp_cid(packet),
               a2dp_subevent_stream_released_get_local_seid(packet));
@@ -157,6 +158,7 @@ static void bt_app_handle_a2dp_meta_event(uint8_t * packet)
         break;
 
     case A2DP_SUBEVENT_SIGNALING_CONNECTION_RELEASED:
+        bt_a2dp_audio_reset();
         LOG_I("A2DP signaling released, cid=0x%04x",
               a2dp_subevent_signaling_connection_released_get_a2dp_cid(packet));
         bt_app_a2dp_cid = 0u;
@@ -207,6 +209,12 @@ rt_err_t bt_a2dp_sink_service_init(void)
     LOG_E("A2DP Sink requires SDP support");
     return -RT_ERROR;
 #else
+    if (bt_a2dp_audio_init() != RT_EOK)
+    {
+        LOG_E("bt_a2dp_audio_init failed");
+        return -RT_ERROR;
+    }
+
     // 这里先把 HCI 通用事件挂上，后面既能看上电状态，也能统一接 A2DP META 事件。
     bt_app_hci_event_callback_registration.callback = &bt_app_packet_handler;
     hci_add_event_handler(&bt_app_hci_event_callback_registration);
