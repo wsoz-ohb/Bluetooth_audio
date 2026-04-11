@@ -1058,35 +1058,14 @@
     <group>
       <name>User</name>
       <file>
-        <name>$PROJ_DIR$/../D:/RT-Thread_project/Bluetooth_audio/cubemx/Src/main.c</name>
+        <name>$PROJ_DIR$/../Src/main.c</name>
       </file>
       <file>
-        <name>$PROJ_DIR$/../D:/RT-Thread_project/Bluetooth_audio/cubemx/Src/stm32f4xx_it.c</name>
+        <name>$PROJ_DIR$/../Src/stm32f4xx_it.c</name>
       </file>
       <file>
-        <name>$PROJ_DIR$/../D:/RT-Thread_project/Bluetooth_audio/cubemx/Src/stm32f4xx_hal_msp.c</name>
+        <name>$PROJ_DIR$/../Src/stm32f4xx_hal_msp.c</name>
       </file>
-      <group>
-        <name>D:</name>
-        <group>
-          <name>RT-Thread_project</name>
-          <group>
-            <name>Bluetooth_audio</name>
-            <group>
-              <name>cubemx</name>
-              <file>
-                <name>$PROJ_DIR$/../D:/RT-Thread_project/Bluetooth_audio/cubemx/Src/main.c</name>
-              </file>
-              <file>
-                <name>$PROJ_DIR$/../D:/RT-Thread_project/Bluetooth_audio/cubemx/Src/stm32f4xx_it.c</name>
-              </file>
-              <file>
-                <name>$PROJ_DIR$/../D:/RT-Thread_project/Bluetooth_audio/cubemx/Src/stm32f4xx_hal_msp.c</name>
-              </file>
-            </group>
-          </group>
-        </group>
-      </group>
     </group>
   </group>
   <group>
@@ -1094,13 +1073,10 @@
     <group>
       <name>STM32F4xx_HAL_Driver</name>
       <file>
-        <name>$PROJ_DIR$/../Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_tim.c</name>
+        <name>$PROJ_DIR$/../Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_i2s.c</name>
       </file>
       <file>
-        <name>$PROJ_DIR$/../Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_tim_ex.c</name>
-      </file>
-      <file>
-        <name>$PROJ_DIR$/../Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_uart.c</name>
+        <name>$PROJ_DIR$/../Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_i2s_ex.c</name>
       </file>
       <file>
         <name>$PROJ_DIR$/../Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_rcc.c</name>
@@ -1140,6 +1116,15 @@
       </file>
       <file>
         <name>$PROJ_DIR$/../Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_exti.c</name>
+      </file>
+      <file>
+        <name>$PROJ_DIR$/../Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_tim.c</name>
+      </file>
+      <file>
+        <name>$PROJ_DIR$/../Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_tim_ex.c</name>
+      </file>
+      <file>
+        <name>$PROJ_DIR$/../Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_uart.c</name>
       </file>
     </group>
     <group>

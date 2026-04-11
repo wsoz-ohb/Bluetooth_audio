@@ -22,7 +22,7 @@ static btstack_sbc_decoder_state_t bt_a2dp_audio_sbc_decoder_state;
 static bt_a2dp_audio_pcm_callback_t bt_a2dp_audio_pcm_callback = RT_NULL;
 static void * bt_a2dp_audio_pcm_context = RT_NULL;
 static rt_bool_t bt_a2dp_audio_inited = RT_FALSE;
-static rt_bool_t bt_a2dp_audio_pcm_notice_printed = RT_FALSE;
+static rt_bool_t bt_a2dp_audio_first_pcm_logged = RT_FALSE;
 
 static void bt_a2dp_audio_handle_pcm(int16_t * data,
                                      int num_samples,
@@ -32,6 +32,15 @@ static void bt_a2dp_audio_handle_pcm(int16_t * data,
 {
     UNUSED(context);
 
+    if (!bt_a2dp_audio_first_pcm_logged)
+    {
+        bt_a2dp_audio_first_pcm_logged = RT_TRUE;
+        LOG_I("first PCM ready: samples=%d, channels=%d, sample_rate=%d",
+              num_samples,
+              num_channels,
+              sample_rate);
+    }
+
     if (bt_a2dp_audio_pcm_callback != RT_NULL)
     {
         bt_a2dp_audio_pcm_callback(data,
@@ -40,13 +49,6 @@ static void bt_a2dp_audio_handle_pcm(int16_t * data,
                                    (uint32_t) sample_rate,
                                    bt_a2dp_audio_pcm_context);
         return;
-    }
-
-    // 如果你还没注册 I2S/播放层回调，这里至少打印一次，告诉你 PCM 已经拿到了。
-    if (!bt_a2dp_audio_pcm_notice_printed)
-    {
-        bt_a2dp_audio_pcm_notice_printed = RT_TRUE;
-        LOG_I("PCM is ready: samples=%d, channels=%d, sample_rate=%d", num_samples, num_channels, sample_rate);
     }
 }
 
@@ -139,7 +141,7 @@ rt_err_t bt_a2dp_audio_init(void)
                              bt_a2dp_audio_handle_pcm,
                              RT_NULL);
     bt_a2dp_audio_inited = RT_TRUE;
-    bt_a2dp_audio_pcm_notice_printed = RT_FALSE;
+    bt_a2dp_audio_first_pcm_logged = RT_FALSE;
     return RT_EOK;
 }
 
@@ -155,7 +157,7 @@ void bt_a2dp_audio_reset(void)
                              SBC_MODE_STANDARD,
                              bt_a2dp_audio_handle_pcm,
                              RT_NULL);
-    bt_a2dp_audio_pcm_notice_printed = RT_FALSE;
+    bt_a2dp_audio_first_pcm_logged = RT_FALSE;
 }
 
 void bt_a2dp_audio_register_pcm_callback(bt_a2dp_audio_pcm_callback_t callback, void * context)
