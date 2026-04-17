@@ -19,8 +19,9 @@ static void btstack_run_loop_embedded_notify(void){
 
 static void btstack_run_loop_embedded_init(void){
     // 先初始化 BTstack 公共链表和定时器基类，再准备 RT-Thread 的唤醒信号量。
-    btstack_run_loop_base_init();
+    btstack_run_loop_base_init();   //完成底层的初始化
 
+    //初始化内部状态
     if (!btstack_run_loop_sem_inited){
         rt_sem_init(&btstack_run_loop_sem, "btloop", 0, RT_IPC_FLAG_FIFO);
         btstack_run_loop_sem_inited = RT_TRUE;
@@ -85,7 +86,7 @@ static void btstack_run_loop_embedded_trigger_exit(void){
     btstack_run_loop_exit_requested = RT_TRUE;
     btstack_run_loop_embedded_notify();
 }
-
+//循环执行函数
 static void btstack_run_loop_embedded_execute(void){
     while (!btstack_run_loop_exit_requested){
         int32_t timeout_ms;
