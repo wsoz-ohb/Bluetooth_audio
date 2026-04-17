@@ -7,7 +7,7 @@
 
 #include "bt_a2dp_audio.h"
 #include "bt_config.h"
-#include "bt_i2s_player.h"
+#include "bt_pcm_stream.h"
 #include "btstack_event.h"
 #include "btstack_util.h"
 #include "hci.h"
@@ -62,7 +62,7 @@ static uint8_t bt_app_a2dp_local_seid = 0u;
 static void bt_app_a2dp_sink_media_handler(uint8_t local_seid, uint8_t * packet, uint16_t size)
 {
     // 协议层只负责把媒体包转交给音频层。
-    // 音频层会继续完成：RTP/SBC 头解析 -> SBC 解码 -> PCM 回调输出。
+    // 音频层会继续完成：RTP/SBC 头解析 -> SBC 解码 -> PCM 写入公共 PCM stream。
     bt_a2dp_audio_process_media_packet(local_seid, packet, size);
 }
 
@@ -96,14 +96,20 @@ static void bt_app_handle_a2dp_meta_event(uint8_t * packet)
     }
 
     case A2DP_SUBEVENT_SIGNALING_MEDIA_CODEC_SBC_CONFIGURATION:
+    {
+        rt_uint32_t sample_rate;
+
+        sample_rate = a2dp_subevent_signaling_media_codec_sbc_configuration_get_sampling_frequency(packet);
+
+        // 这里开始不再直接控制某个具体后端，
+        // 而是只把当前流的格式和生命周期同步给公共 PCM stream。
         bt_a2dp_audio_reset();
-        if (bt_i2s_player_prepare(
-                a2dp_subevent_signaling_media_codec_sbc_configuration_get_sampling_frequency(packet), 2u) != RT_EOK)
+        if (bt_pcm_stream_configure(sample_rate, 2u) != RT_EOK)
         {
-            LOG_W("bt_i2s_player_prepare failed");
+            LOG_W("bt_pcm_stream_configure failed");
         }
         LOG_I("A2DP SBC config: freq=%u, mode=%u, blocks=%u, subbands=%u, alloc=%u, bitpool=%u-%u",
-              a2dp_subevent_signaling_media_codec_sbc_configuration_get_sampling_frequency(packet),
+              sample_rate,
               a2dp_subevent_signaling_media_codec_sbc_configuration_get_channel_mode(packet),
               a2dp_subevent_signaling_media_codec_sbc_configuration_get_block_length(packet),
               a2dp_subevent_signaling_media_codec_sbc_configuration_get_subbands(packet),
@@ -111,6 +117,7 @@ static void bt_app_handle_a2dp_meta_event(uint8_t * packet)
               a2dp_subevent_signaling_media_codec_sbc_configuration_get_min_bitpool_value(packet),
               a2dp_subevent_signaling_media_codec_sbc_configuration_get_max_bitpool_value(packet));
         break;
+    }
 
     case A2DP_SUBEVENT_STREAM_ESTABLISHED:
     {
@@ -138,9 +145,9 @@ static void bt_app_handle_a2dp_meta_event(uint8_t * packet)
     }
 
     case A2DP_SUBEVENT_STREAM_STARTED:
-        if (bt_i2s_player_start() != RT_EOK)
+        if (bt_pcm_stream_start() != RT_EOK)
         {
-            LOG_E("bt_i2s_player_start failed");
+            LOG_E("bt_pcm_stream_start failed");
         }
         LOG_I("A2DP stream started, cid=0x%04x, local_seid=%u",
               a2dp_subevent_stream_started_get_a2dp_cid(packet),
@@ -148,21 +155,24 @@ static void bt_app_handle_a2dp_meta_event(uint8_t * packet)
         break;
 
     case A2DP_SUBEVENT_STREAM_SUSPENDED:
-        (void) bt_i2s_player_stop();
+        bt_pcm_stream_stop();
+        bt_pcm_stream_flush();
         LOG_I("A2DP stream suspended, cid=0x%04x, local_seid=%u",
               a2dp_subevent_stream_suspended_get_a2dp_cid(packet),
               a2dp_subevent_stream_suspended_get_local_seid(packet));
         break;
 
     case A2DP_SUBEVENT_STREAM_STOPPED:
-        (void) bt_i2s_player_stop();
+        bt_pcm_stream_stop();
+        bt_pcm_stream_flush();
         LOG_I("A2DP stream stopped, cid=0x%04x, local_seid=%u",
               a2dp_subevent_stream_stopped_get_a2dp_cid(packet),
               a2dp_subevent_stream_stopped_get_local_seid(packet));
         break;
 
     case A2DP_SUBEVENT_STREAM_RELEASED:
-        (void) bt_i2s_player_stop();
+        bt_pcm_stream_stop();
+        bt_pcm_stream_flush();
         bt_a2dp_audio_reset();
         LOG_I("A2DP stream released, cid=0x%04x, local_seid=%u",
               a2dp_subevent_stream_released_get_a2dp_cid(packet),
@@ -171,7 +181,8 @@ static void bt_app_handle_a2dp_meta_event(uint8_t * packet)
         break;
 
     case A2DP_SUBEVENT_SIGNALING_CONNECTION_RELEASED:
-        (void) bt_i2s_player_stop();
+        bt_pcm_stream_stop();
+        bt_pcm_stream_flush();
         bt_a2dp_audio_reset();
         LOG_I("A2DP signaling released, cid=0x%04x",
               a2dp_subevent_signaling_connection_released_get_a2dp_cid(packet));
@@ -226,6 +237,12 @@ rt_err_t bt_a2dp_sink_service_init(void)
     if (bt_a2dp_audio_init() != RT_EOK)
     {
         LOG_E("bt_a2dp_audio_init failed");
+        return -RT_ERROR;
+    }
+
+    if (bt_pcm_stream_init() != RT_EOK)
+    {
+        LOG_E("bt_pcm_stream_init failed");
         return -RT_ERROR;
     }
 

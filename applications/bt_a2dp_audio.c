@@ -7,6 +7,7 @@
 
 #include <string.h>
 
+#include "bt_pcm_stream.h"
 #include "btstack_util.h"
 #include "classic/avdtp.h"
 #include "classic/btstack_sbc.h"
@@ -19,8 +20,6 @@
 #define BT_A2DP_AUDIO_SBC_HEADER_SIZE         1u
 
 static btstack_sbc_decoder_state_t bt_a2dp_audio_sbc_decoder_state;
-static bt_a2dp_audio_pcm_callback_t bt_a2dp_audio_pcm_callback = RT_NULL;
-static void * bt_a2dp_audio_pcm_context = RT_NULL;
 static rt_bool_t bt_a2dp_audio_inited = RT_FALSE;
 static rt_bool_t bt_a2dp_audio_first_pcm_logged = RT_FALSE;
 
@@ -30,6 +29,8 @@ static void bt_a2dp_audio_handle_pcm(int16_t * data,
                                      int sample_rate,
                                      void * context)
 {
+    rt_uint32_t written_frames;
+
     UNUSED(context);
 
     if (!bt_a2dp_audio_first_pcm_logged)
@@ -41,14 +42,15 @@ static void bt_a2dp_audio_handle_pcm(int16_t * data,
               sample_rate);
     }
 
-    if (bt_a2dp_audio_pcm_callback != RT_NULL)
+    // 解码层现在只负责把 PCM 写进公共 PCM 管道，
+    // 不再直接认识具体播放后端（例如 WM / MAX）。
+    written_frames = bt_pcm_stream_write(data,
+                                         (rt_uint32_t) num_samples,
+                                         (rt_uint8_t) num_channels,
+                                         (rt_uint32_t) sample_rate);
+    if ((written_frames == 0u) && (num_samples > 0))
     {
-        bt_a2dp_audio_pcm_callback(data,
-                                   (uint16_t) num_samples,
-                                   (uint8_t) num_channels,
-                                   (uint32_t) sample_rate,
-                                   bt_a2dp_audio_pcm_context);
-        return;
+        LOG_W("PCM stream rejected decoded PCM, samples=%d", num_samples);
     }
 }
 
@@ -136,6 +138,12 @@ static rt_err_t bt_a2dp_audio_parse_sbc_payload(const uint8_t * packet,
 
 rt_err_t bt_a2dp_audio_init(void)
 {
+    if (bt_pcm_stream_init() != RT_EOK)
+    {
+        LOG_E("bt_pcm_stream_init failed");
+        return -RT_ERROR;
+    }
+
     btstack_sbc_decoder_init(&bt_a2dp_audio_sbc_decoder_state,
                              SBC_MODE_STANDARD,
                              bt_a2dp_audio_handle_pcm,
@@ -158,12 +166,6 @@ void bt_a2dp_audio_reset(void)
                              bt_a2dp_audio_handle_pcm,
                              RT_NULL);
     bt_a2dp_audio_first_pcm_logged = RT_FALSE;
-}
-
-void bt_a2dp_audio_register_pcm_callback(bt_a2dp_audio_pcm_callback_t callback, void * context)
-{
-    bt_a2dp_audio_pcm_callback = callback;
-    bt_a2dp_audio_pcm_context = context;
 }
 
 void bt_a2dp_audio_process_media_packet(uint8_t local_seid, const uint8_t * packet, uint16_t size)
@@ -206,3 +208,4 @@ void bt_a2dp_audio_process_media_packet(uint8_t local_seid, const uint8_t * pack
                                      sbc_payload,
                                      (int) sbc_payload_size);
 }
+

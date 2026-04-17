@@ -13,9 +13,15 @@
 #define DBG_LVL DBG_LOG
 #include <rtdbg.h>
 #include "bt_app.h"
+#include "bt_i2s_player.h"
 
 int main(void)
 {
+    if (bt_i2s_player_init() != RT_EOK)
+    {
+        LOG_E("bt_i2s_player_init failed");
+    }
+
     if (bt__init() != RT_EOK)
     {
         LOG_E("bt__init failed");

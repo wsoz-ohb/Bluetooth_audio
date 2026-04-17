@@ -9,9 +9,25 @@
  */
 #include "bt_i2s_player.h"
 
-#include "bt_a2dp_audio.h"
+#include "bt_pcm_stream.h"
 #include "main.h"
+
+#define BT_I2S_PLAYER_BACKEND_WM8978      1u
+#define BT_I2S_PLAYER_BACKEND_MAX98375    2u
+
+#ifndef BT_I2S_PLAYER_BACKEND
+#define BT_I2S_PLAYER_BACKEND             BT_I2S_PLAYER_BACKEND_MAX98375
+#endif
+
+#if BT_I2S_PLAYER_BACKEND == BT_I2S_PLAYER_BACKEND_WM8978
 #include "wm9878_driver.h"
+#define BT_I2S_PLAYER_DEFAULT_SAMPLE_RATE WM8978_DEFAULT_SAMPLE_RATE
+#elif BT_I2S_PLAYER_BACKEND == BT_I2S_PLAYER_BACKEND_MAX98375
+#include "max98375_driver.h"
+#define BT_I2S_PLAYER_DEFAULT_SAMPLE_RATE MAX98375_DEFAULT_SAMPLE_RATE
+#else
+#error "Unsupported BT_I2S_PLAYER_BACKEND"
+#endif
 
 #define DBG_TAG "bt_i2s"
 #define DBG_LVL DBG_INFO
@@ -22,11 +38,8 @@
 #define BT_I2S_PLAYER_DMA_BUFFER_FRAMES          (BT_I2S_PLAYER_DMA_HALF_FRAMES * 2u)
 #define BT_I2S_PLAYER_DMA_BUFFER_SAMPLES         (BT_I2S_PLAYER_DMA_BUFFER_FRAMES * BT_I2S_PLAYER_OUTPUT_CHANNELS)
 #define BT_I2S_PLAYER_DMA_HALF_SAMPLES           (BT_I2S_PLAYER_DMA_HALF_FRAMES * BT_I2S_PLAYER_OUTPUT_CHANNELS)
-#define BT_I2S_PLAYER_RING_BUFFER_FRAMES         8192u
-#define BT_I2S_PLAYER_RING_BUFFER_SAMPLES        (BT_I2S_PLAYER_RING_BUFFER_FRAMES * BT_I2S_PLAYER_OUTPUT_CHANNELS)
-// 等积累到 4 个 DMA buffer 再启动，优先换取更稳的起播和更少的抖动噪声。
+// 等积累到 6 个 DMA buffer 再启动，优先换取更稳的起播和更少的抖动噪声。
 #define BT_I2S_PLAYER_START_THRESHOLD_FRAMES     (BT_I2S_PLAYER_DMA_BUFFER_FRAMES * 6u)
-#define BT_I2S_PLAYER_START_THRESHOLD_SAMPLES    (BT_I2S_PLAYER_START_THRESHOLD_FRAMES * BT_I2S_PLAYER_OUTPUT_CHANNELS)
 #define BT_I2S_PLAYER_PRIME_TIMEOUT_MS           50u
 
 extern I2S_HandleTypeDef hi2s2;
@@ -39,19 +52,104 @@ typedef struct
     rt_bool_t i2s_inited;
     rt_bool_t playback_started;
     rt_bool_t start_pending;
-    rt_bool_t overflow_notice_printed;
     rt_bool_t underflow_notice_printed;
-    rt_bool_t first_pcm_logged;
     rt_uint32_t sample_rate;
     rt_uint8_t channels;
-    rt_size_t ring_read;
-    rt_size_t ring_write;
-    rt_size_t ring_level;
 } bt_i2s_player_context_t;
 
 static bt_i2s_player_context_t bt_i2s_player_ctx;
-static rt_int16_t bt_i2s_player_ring_buffer[BT_I2S_PLAYER_RING_BUFFER_SAMPLES];
 static rt_uint16_t bt_i2s_player_dma_buffer[BT_I2S_PLAYER_DMA_BUFFER_SAMPLES];
+
+static const char * bt_i2s_player_backend_name(void)
+{
+#if BT_I2S_PLAYER_BACKEND == BT_I2S_PLAYER_BACKEND_WM8978
+    return "wm8978";
+#else
+    return "max98375";
+#endif
+}
+
+static rt_err_t bt_i2s_player_backend_init(void)
+{
+#if BT_I2S_PLAYER_BACKEND == BT_I2S_PLAYER_BACKEND_WM8978
+    if (wm8978_init() != RT_EOK)
+    {
+        LOG_E("wm8978_init failed");
+        return -RT_ERROR;
+    }
+
+    if (wm8978_set_output_route(WM8978_ROUTE_SPEAKER) != RT_EOK)
+    {
+        LOG_E("wm8978_set_output_route failed");
+        return -RT_ERROR;
+    }
+#else
+    if (max98375_init() != RT_EOK)
+    {
+        LOG_E("max98375_init failed");
+        return -RT_ERROR;
+    }
+#endif
+
+    return RT_EOK;
+}
+
+static rt_err_t bt_i2s_player_backend_set_sample_rate(rt_uint32_t sample_rate)
+{
+#if BT_I2S_PLAYER_BACKEND == BT_I2S_PLAYER_BACKEND_WM8978
+    if (wm8978_set_sample_rate(sample_rate) != RT_EOK)
+    {
+        LOG_E("wm8978_set_sample_rate failed: %u", sample_rate);
+        return -RT_ERROR;
+    }
+#else
+    if (max98375_set_sample_rate(sample_rate) != RT_EOK)
+    {
+        LOG_E("max98375_set_sample_rate failed: %u", sample_rate);
+        return -RT_ERROR;
+    }
+#endif
+
+    return RT_EOK;
+}
+
+static rt_err_t bt_i2s_player_backend_start(void)
+{
+#if BT_I2S_PLAYER_BACKEND == BT_I2S_PLAYER_BACKEND_WM8978
+    if (wm8978_start_playback() != RT_EOK)
+    {
+        LOG_E("wm8978_start_playback failed");
+        return -RT_ERROR;
+    }
+#else
+    if (max98375_start_playback() != RT_EOK)
+    {
+        LOG_E("max98375_start_playback failed");
+        return -RT_ERROR;
+    }
+#endif
+
+    return RT_EOK;
+}
+
+static rt_err_t bt_i2s_player_backend_stop(void)
+{
+#if BT_I2S_PLAYER_BACKEND == BT_I2S_PLAYER_BACKEND_WM8978
+    if (wm8978_stop_playback() != RT_EOK)
+    {
+        LOG_E("wm8978_stop_playback failed");
+        return -RT_ERROR;
+    }
+#else
+    if (max98375_stop_playback() != RT_EOK)
+    {
+        LOG_E("max98375_stop_playback failed");
+        return -RT_ERROR;
+    }
+#endif
+
+    return RT_EOK;
+}
 
 static uint32_t bt_i2s_player_sample_rate_to_hal(rt_uint32_t sample_rate)
 {
@@ -83,23 +181,10 @@ static void bt_i2s_player_clear_dma_buffer(void)
     rt_memset(bt_i2s_player_dma_buffer, 0, sizeof(bt_i2s_player_dma_buffer));
 }
 
-void bt_i2s_player_reset_buffer(void)
+static void bt_i2s_player_reset_runtime(void)
 {
-    rt_base_t level;
-
-    level = rt_hw_interrupt_disable();
-    bt_i2s_player_ctx.ring_read = 0u;
-    bt_i2s_player_ctx.ring_write = 0u;
-    bt_i2s_player_ctx.ring_level = 0u;
-    bt_i2s_player_ctx.overflow_notice_printed = RT_FALSE;
+    bt_i2s_player_ctx.start_pending = RT_FALSE;
     bt_i2s_player_ctx.underflow_notice_printed = RT_FALSE;
-    bt_i2s_player_ctx.first_pcm_logged = RT_FALSE;
-    rt_hw_interrupt_enable(level);
-}
-
-void bt_i2s_player_flush(void)
-{
-    bt_i2s_player_reset_buffer();
 }
 
 static rt_err_t bt_i2s_player_dma_init(void)
@@ -143,35 +228,25 @@ static rt_err_t bt_i2s_player_dma_init(void)
 
 static void bt_i2s_player_refill_dma_range(rt_size_t offset, rt_size_t samples)
 {
-    rt_size_t copied;
-    rt_base_t level;
+    rt_size_t copied_samples;
+    rt_size_t read_frames;
 
-    copied = 0u;
+    copied_samples = 0u;
+    // 具体后端现在只负责从公共 PCM stream 消费数据，
+    // 不再由解码层直接把 PCM 推进来。
+    read_frames = bt_pcm_stream_read((rt_int16_t *) &bt_i2s_player_dma_buffer[offset],
+                                     (rt_uint32_t) (samples / BT_I2S_PLAYER_OUTPUT_CHANNELS));
+    copied_samples = read_frames * BT_I2S_PLAYER_OUTPUT_CHANNELS;
 
-    level = rt_hw_interrupt_disable();
-    while ((copied < samples) && (bt_i2s_player_ctx.ring_level > 0u))
-    {
-        bt_i2s_player_dma_buffer[offset + copied] =
-            (rt_uint16_t) bt_i2s_player_ring_buffer[bt_i2s_player_ctx.ring_read];
-        bt_i2s_player_ctx.ring_read++;
-        if (bt_i2s_player_ctx.ring_read >= BT_I2S_PLAYER_RING_BUFFER_SAMPLES)
-        {
-            bt_i2s_player_ctx.ring_read = 0u;
-        }
-        bt_i2s_player_ctx.ring_level--;
-        copied++;
-    }
-    rt_hw_interrupt_enable(level);
-
-    while (copied < samples)
+    while (copied_samples < samples)
     {
         if (bt_i2s_player_ctx.playback_started && !bt_i2s_player_ctx.underflow_notice_printed)
         {
             bt_i2s_player_ctx.underflow_notice_printed = RT_TRUE;
-            LOG_W("I2S DMA underflow, output silence until PCM buffer refills");
+            LOG_W("I2S DMA underflow, output silence until PCM stream refills");
         }
-        bt_i2s_player_dma_buffer[offset + copied] = 0u;
-        copied++;
+        bt_i2s_player_dma_buffer[offset + copied_samples] = 0u;
+        copied_samples++;
     }
 }
 
@@ -184,15 +259,9 @@ static void bt_i2s_player_prefill_dma_buffer(void)
 
 static rt_bool_t bt_i2s_player_can_start_dma(void)
 {
-    rt_base_t level;
-    rt_bool_t ready;
-
-    level = rt_hw_interrupt_disable();
-    ready = (rt_bool_t) (bt_i2s_player_ctx.start_pending &&
-                         !bt_i2s_player_ctx.playback_started &&
-                         (bt_i2s_player_ctx.ring_level >= BT_I2S_PLAYER_START_THRESHOLD_SAMPLES));
-    rt_hw_interrupt_enable(level);
-    return ready;
+    return (rt_bool_t) (bt_i2s_player_ctx.start_pending &&
+                        !bt_i2s_player_ctx.playback_started &&
+                        (bt_pcm_stream_get_level_frames() >= BT_I2S_PLAYER_START_THRESHOLD_FRAMES));
 }
 
 static rt_err_t bt_i2s_player_try_start_dma(void)
@@ -216,6 +285,7 @@ static rt_err_t bt_i2s_player_try_start_dma(void)
     level = rt_hw_interrupt_disable();
     bt_i2s_player_ctx.playback_started = RT_TRUE;
     bt_i2s_player_ctx.start_pending = RT_FALSE;
+    bt_i2s_player_ctx.underflow_notice_printed = RT_FALSE;
     rt_hw_interrupt_enable(level);
 
     LOG_I("bt_i2s_player started");
@@ -289,9 +359,8 @@ static rt_err_t bt_i2s_player_i2s_reconfigure(rt_uint32_t sample_rate)
         return -RT_ERROR;
     }
 
-    if (wm8978_set_sample_rate(sample_rate) != RT_EOK)
+    if (bt_i2s_player_backend_set_sample_rate(sample_rate) != RT_EOK)
     {
-        LOG_E("wm8978_set_sample_rate failed: %u", sample_rate);
         return -RT_ERROR;
     }
 
@@ -310,103 +379,7 @@ static rt_err_t bt_i2s_player_i2s_reconfigure(rt_uint32_t sample_rate)
     return RT_EOK;
 }
 
-static void bt_i2s_player_pcm_callback(const int16_t * pcm,
-                                       uint16_t num_samples,
-                                       uint8_t num_channels,
-                                       uint32_t sample_rate,
-                                       void * context)
-{
-    rt_uint16_t frame_index;
-    rt_base_t level;
-
-    UNUSED(context);
-
-    if ((pcm == RT_NULL) || (num_samples == 0u))
-    {
-        return;
-    }
-
-    if (!bt_i2s_player_ctx.inited)
-    {
-        return;
-    }
-
-    if ((num_channels == 0u) || (num_channels > 2u))
-    {
-        LOG_W("unsupported pcm channels: %u", num_channels);
-        return;
-    }
-
-    if ((sample_rate != bt_i2s_player_ctx.sample_rate) ||
-        (bt_i2s_player_ctx.channels != num_channels))
-    {
-        if (bt_i2s_player_prepare(sample_rate, num_channels) != RT_EOK)
-        {
-            return;
-        }
-    }
-
-    if (!bt_i2s_player_ctx.first_pcm_logged)
-    {
-        bt_i2s_player_ctx.first_pcm_logged = RT_TRUE;
-        LOG_I("first PCM queued to I2S: frames=%u, channels=%u, sample_rate=%u",
-              num_samples,
-              num_channels,
-              sample_rate);
-    }
-
-    level = rt_hw_interrupt_disable();
-    for (frame_index = 0u; frame_index < num_samples; frame_index++)
-    {
-        rt_int16_t left_sample;
-        rt_int16_t right_sample;
-
-        if ((BT_I2S_PLAYER_RING_BUFFER_SAMPLES - bt_i2s_player_ctx.ring_level) < BT_I2S_PLAYER_OUTPUT_CHANNELS)
-        {
-            if (!bt_i2s_player_ctx.overflow_notice_printed)
-            {
-                bt_i2s_player_ctx.overflow_notice_printed = RT_TRUE;
-                LOG_W("PCM ring buffer overflow, drop audio frames");
-            }
-            break;
-        }
-
-        if (num_channels == 1u)
-        {
-            left_sample = pcm[frame_index];
-            right_sample = left_sample;
-        }
-        else
-        {
-            left_sample = pcm[(rt_size_t) frame_index * num_channels];
-            right_sample = pcm[(rt_size_t) frame_index * num_channels + 1u];
-        }
-
-        bt_i2s_player_ring_buffer[bt_i2s_player_ctx.ring_write] = left_sample;
-        bt_i2s_player_ctx.ring_write++;
-        if (bt_i2s_player_ctx.ring_write >= BT_I2S_PLAYER_RING_BUFFER_SAMPLES)
-        {
-            bt_i2s_player_ctx.ring_write = 0u;
-        }
-
-        bt_i2s_player_ring_buffer[bt_i2s_player_ctx.ring_write] = right_sample;
-        bt_i2s_player_ctx.ring_write++;
-        if (bt_i2s_player_ctx.ring_write >= BT_I2S_PLAYER_RING_BUFFER_SAMPLES)
-        {
-            bt_i2s_player_ctx.ring_write = 0u;
-        }
-
-        bt_i2s_player_ctx.ring_level += BT_I2S_PLAYER_OUTPUT_CHANNELS;
-    }
-    rt_hw_interrupt_enable(level);
-
-    if (bt_i2s_player_ctx.start_pending)
-    {
-        (void) bt_i2s_player_try_start_dma();
-    }
-}
-
-rt_err_t bt_i2s_player_prepare(rt_uint32_t sample_rate, rt_uint8_t channels)
+static rt_err_t bt_i2s_player_prepare(rt_uint32_t sample_rate, rt_uint8_t channels)
 {
     if (!bt_i2s_player_ctx.inited)
     {
@@ -419,63 +392,12 @@ rt_err_t bt_i2s_player_prepare(rt_uint32_t sample_rate, rt_uint8_t channels)
     }
 
     bt_i2s_player_ctx.channels = channels;
-    bt_i2s_player_reset_buffer();
+    bt_i2s_player_reset_runtime();
+    bt_i2s_player_clear_dma_buffer();
     return bt_i2s_player_i2s_reconfigure(sample_rate);
 }
 
-rt_err_t bt_i2s_player_set_sample_rate(rt_uint32_t sample_rate)
-{
-    return bt_i2s_player_prepare(sample_rate,
-                                 bt_i2s_player_ctx.channels == 0u ?
-                                 BT_I2S_PLAYER_OUTPUT_CHANNELS :
-                                 bt_i2s_player_ctx.channels);
-}
-
-rt_err_t bt_i2s_player_init(void)
-{
-    if (bt_i2s_player_ctx.inited)
-    {
-        return RT_EOK;
-    }
-
-    if (wm8978_init() != RT_EOK)
-    {
-        LOG_E("wm8978_init failed");
-        return -RT_ERROR;
-    }
-
-    if (wm8978_set_output_route(WM8978_ROUTE_SPEAKER) != RT_EOK)
-    {
-        LOG_E("wm8978_set_output_route failed");
-        return -RT_ERROR;
-    }
-
-    bt_i2s_player_ctx.inited = RT_TRUE;
-    bt_i2s_player_ctx.channels = BT_I2S_PLAYER_OUTPUT_CHANNELS;
-    bt_i2s_player_reset_buffer();
-    bt_i2s_player_clear_dma_buffer();
-
-    if (bt_i2s_player_i2s_reconfigure(WM8978_DEFAULT_SAMPLE_RATE) != RT_EOK)
-    {
-        bt_i2s_player_ctx.inited = RT_FALSE;
-        return -RT_ERROR;
-    }
-
-    (void) bt_i2s_player_prime_i2s_clock();
-    if (wm8978_start_playback() != RT_EOK)
-    {
-        bt_i2s_player_ctx.inited = RT_FALSE;
-        LOG_E("wm8978_start_playback failed");
-        return -RT_ERROR;
-    }
-
-    bt_a2dp_audio_register_pcm_callback(bt_i2s_player_pcm_callback, RT_NULL);
-
-    LOG_I("bt_i2s_player init ok, route=speaker, sample_rate=%u", bt_i2s_player_ctx.sample_rate);
-    return RT_EOK;
-}
-
-rt_err_t bt_i2s_player_start(void)
+static rt_err_t bt_i2s_player_start(void)
 {
     if (!bt_i2s_player_ctx.inited)
     {
@@ -487,22 +409,29 @@ rt_err_t bt_i2s_player_start(void)
         return RT_EOK;
     }
 
+    if (bt_i2s_player_backend_start() != RT_EOK)
+    {
+        return -RT_ERROR;
+    }
+
     bt_i2s_player_ctx.start_pending = RT_TRUE;
     if (bt_i2s_player_try_start_dma() != RT_EOK)
     {
+        (void) bt_i2s_player_backend_stop();
+        bt_i2s_player_ctx.start_pending = RT_FALSE;
         return -RT_ERROR;
     }
 
     if (!bt_i2s_player_ctx.playback_started)
     {
-        LOG_I("bt_i2s_player waiting PCM buffer before DMA start, threshold_frames=%u",
+        LOG_I("bt_i2s_player waiting PCM stream before DMA start, threshold_frames=%u",
               BT_I2S_PLAYER_START_THRESHOLD_FRAMES);
     }
 
     return RT_EOK;
 }
 
-rt_err_t bt_i2s_player_stop(void)
+static rt_err_t bt_i2s_player_stop(void)
 {
     if (!bt_i2s_player_ctx.inited)
     {
@@ -511,17 +440,107 @@ rt_err_t bt_i2s_player_stop(void)
 
     if (!bt_i2s_player_ctx.playback_started)
     {
-        bt_i2s_player_ctx.start_pending = RT_FALSE;
-        bt_i2s_player_reset_buffer();
+        bt_i2s_player_reset_runtime();
+        (void) bt_i2s_player_backend_stop();
+        bt_i2s_player_clear_dma_buffer();
         return RT_EOK;
     }
 
     bt_i2s_player_ctx.playback_started = RT_FALSE;
-    bt_i2s_player_ctx.start_pending = RT_FALSE;
+    bt_i2s_player_reset_runtime();
     (void) HAL_I2S_DMAStop(&hi2s2);
-    bt_i2s_player_reset_buffer();
+    (void) bt_i2s_player_backend_stop();
     bt_i2s_player_clear_dma_buffer();
     LOG_I("bt_i2s_player stopped");
+    return RT_EOK;
+}
+
+static void bt_i2s_player_on_stream_configure(rt_uint32_t sample_rate, rt_uint8_t channels)
+{
+    if (bt_i2s_player_prepare(sample_rate, channels) != RT_EOK)
+    {
+        LOG_W("bt_i2s_player_prepare failed");
+    }
+}
+
+static void bt_i2s_player_on_stream_start(void)
+{
+    if (bt_i2s_player_start() != RT_EOK)
+    {
+        LOG_E("bt_i2s_player_start failed");
+    }
+}
+
+static void bt_i2s_player_on_stream_stop(void)
+{
+    (void) bt_i2s_player_stop();
+}
+
+static void bt_i2s_player_on_stream_data_available(void)
+{
+    if (bt_i2s_player_ctx.start_pending)
+    {
+        if (bt_i2s_player_try_start_dma() != RT_EOK)
+        {
+            (void) bt_i2s_player_backend_stop();
+            bt_i2s_player_ctx.start_pending = RT_FALSE;
+            LOG_E("bt_i2s_player delayed DMA start failed");
+        }
+    }
+}
+
+static const bt_pcm_stream_sink_t bt_i2s_player_stream_sink = {
+    .on_configure = bt_i2s_player_on_stream_configure,
+    .on_start = bt_i2s_player_on_stream_start,
+    .on_stop = bt_i2s_player_on_stream_stop,
+    .on_data_available = bt_i2s_player_on_stream_data_available,
+};
+
+rt_err_t bt_i2s_player_init(void)
+{
+    if (bt_i2s_player_ctx.inited)
+    {
+        (void) bt_pcm_stream_register_sink(&bt_i2s_player_stream_sink);
+        return RT_EOK;
+    }
+
+    if (bt_i2s_player_backend_init() != RT_EOK)
+    {
+        return -RT_ERROR;
+    }
+
+    bt_i2s_player_ctx.inited = RT_TRUE;
+    bt_i2s_player_ctx.channels = BT_I2S_PLAYER_OUTPUT_CHANNELS;
+    bt_i2s_player_clear_dma_buffer();
+
+    if (bt_i2s_player_i2s_reconfigure(BT_I2S_PLAYER_DEFAULT_SAMPLE_RATE) != RT_EOK)
+    {
+        bt_i2s_player_ctx.inited = RT_FALSE;
+        return -RT_ERROR;
+    }
+
+    (void) bt_i2s_player_prime_i2s_clock();
+
+    if (bt_pcm_stream_init() != RT_EOK)
+    {
+        bt_i2s_player_ctx.inited = RT_FALSE;
+        (void) bt_i2s_player_backend_stop();
+        LOG_E("bt_pcm_stream_init failed");
+        return -RT_ERROR;
+    }
+
+    // 当前播放后端统一通过同一个 sink 从公共 PCM stream 取数。
+    if (bt_pcm_stream_register_sink(&bt_i2s_player_stream_sink) != RT_EOK)
+    {
+        bt_i2s_player_ctx.inited = RT_FALSE;
+        (void) bt_i2s_player_backend_stop();
+        LOG_E("bt_pcm_stream_register_sink failed");
+        return -RT_ERROR;
+    }
+
+    LOG_I("bt_i2s_player init ok, backend=%s, sample_rate=%u",
+          bt_i2s_player_backend_name(),
+          bt_i2s_player_ctx.sample_rate);
     return RT_EOK;
 }
 
@@ -570,5 +589,7 @@ void DMA1_Stream4_IRQHandler(void)
 {
     HAL_DMA_IRQHandler(&bt_i2s_player_ctx.hdma_i2s2_tx);
 }
+
+
 
 

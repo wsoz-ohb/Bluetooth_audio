@@ -89,6 +89,7 @@
                   <listOptionValue builtIn="false" value="&quot;${workspace_loc:/Bluetooth_audio/mycomponents/BT-STACK/3rd-party/lc3-google/include}&quot;" />
                   <listOptionValue builtIn="false" value="&quot;${workspace_loc:/Bluetooth_audio/mycomponents/BT-STACK/3rd-party/stb}&quot;" />
                   <listOptionValue builtIn="false" value="&quot;${workspace_loc:/Bluetooth_audio/mycomponents/wm9878}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc:/Bluetooth_audio/mycomponents/MAX98375}&quot;" />
                   <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//.}&quot;" />
                   <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//cubemx/Inc}&quot;" />
                   <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//cubemx}&quot;" />
@@ -244,3 +245,4 @@
     </doc-comment-owner>
   </storageModule>
 </cproject>
+

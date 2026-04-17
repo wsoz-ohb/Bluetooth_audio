@@ -8,7 +8,6 @@
  * 2026-04-02     wsoz       the first version
  */
 #include "bt_app.h"
-#include "bt_i2s_player.h"
 #include "btstack_port.h"
 #include "bt_a2dp_sink_app.h"
 
@@ -18,19 +17,8 @@
 
 static int bt_profiles_init(void)
 {
-    int err;
-
-    /*
-     * 当前应用目标已经收敛为“蓝牙音频接收并本地播放”，
-     * 因此本地音频输出链路初始化失败时，直接终止后续 profile 注册。
-     */
-    err = bt_i2s_player_init();
-    if (err != RT_EOK)
-    {
-        LOG_E("bt_i2s_player_init failed: %d", err);
-        return err;
-    }
-
+    // 这里只负责注册蓝牙 profile。
+    // 具体音频后端（WM / MAX）不在这里绑定，由 main 决定启用哪个后端。
     return bt_a2dp_sink_service_init();
 }
 
@@ -52,7 +40,8 @@ rt_err_t bt__init(void)
         return RT_ERROR;
     }
 
-    /* 第二步注册当前需要的 profile 服务。 */
+    /* 第二步只注册当前需要的蓝牙 profile 服务。 */
+    /* 到这里仍然不触碰具体音频后端。 */
     err = bt_profiles_init();
     if (err != RT_EOK)
     {
@@ -72,3 +61,5 @@ rt_err_t bt__init(void)
     LOG_I("BT-STACK init ok");
     return RT_EOK;
 }
+
+
