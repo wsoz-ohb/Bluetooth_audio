@@ -7,7 +7,7 @@
 
 #include <string.h>
 
-#include "bt_pcm_stream.h"
+#include "es8311_audio.h"
 #include "btstack_util.h"
 #include "classic/avdtp.h"
 #include "classic/btstack_sbc.h"
@@ -18,10 +18,38 @@
 
 #define BT_A2DP_AUDIO_RTP_HEADER_MIN_SIZE     12u
 #define BT_A2DP_AUDIO_SBC_HEADER_SIZE         1u
+#define BT_A2DP_AUDIO_BACKPRESSURE_LEVEL      8192u
 
 static btstack_sbc_decoder_state_t bt_a2dp_audio_sbc_decoder_state;
 static rt_bool_t bt_a2dp_audio_inited = RT_FALSE;
 static rt_bool_t bt_a2dp_audio_first_pcm_logged = RT_FALSE;
+static rt_bool_t bt_a2dp_audio_parse_error_logged = RT_FALSE;
+static rt_bool_t bt_a2dp_audio_fragmented_logged = RT_FALSE;
+static rt_bool_t bt_a2dp_audio_backpressure_logged = RT_FALSE;
+static es8311_audio_playback_write_status_t bt_a2dp_audio_last_write_status = ES8311_AUDIO_PLAYBACK_WRITE_OK;
+
+static const char * bt_a2dp_audio_write_status_name(es8311_audio_playback_write_status_t status)
+{
+    switch (status)
+    {
+    case ES8311_AUDIO_PLAYBACK_WRITE_OK:
+        return "ok";
+    case ES8311_AUDIO_PLAYBACK_WRITE_INVALID_ARGUMENT:
+        return "invalid_argument";
+    case ES8311_AUDIO_PLAYBACK_WRITE_NOT_INITED:
+        return "not_inited";
+    case ES8311_AUDIO_PLAYBACK_WRITE_NOT_RUNNING:
+        return "not_running";
+    case ES8311_AUDIO_PLAYBACK_WRITE_INVALID_FORMAT:
+        return "invalid_format";
+    case ES8311_AUDIO_PLAYBACK_WRITE_SAMPLE_RATE_MISMATCH:
+        return "sample_rate_mismatch";
+    case ES8311_AUDIO_PLAYBACK_WRITE_BUFFER_FULL:
+        return "buffer_full";
+    default:
+        return "unknown";
+    }
+}
 
 static void bt_a2dp_audio_handle_pcm(int16_t * data,
                                      int num_samples,
@@ -30,6 +58,7 @@ static void bt_a2dp_audio_handle_pcm(int16_t * data,
                                      void * context)
 {
     rt_uint32_t written_frames;
+    es8311_audio_playback_write_status_t write_status;
 
     UNUSED(context);
 
@@ -42,15 +71,32 @@ static void bt_a2dp_audio_handle_pcm(int16_t * data,
               sample_rate);
     }
 
-    // 解码层现在只负责把 PCM 写进公共 PCM 管道，
-    // 不再直接认识具体播放后端（例如 WM / MAX）。
-    written_frames = bt_pcm_stream_write(data,
-                                         (rt_uint32_t) num_samples,
-                                         (rt_uint8_t) num_channels,
-                                         (rt_uint32_t) sample_rate);
+    // 解码层只负责把 PCM 写入 ES8311 统一音频会话层。
+    written_frames = es8311_audio_write_playback_checked(data,
+                                                         (rt_uint32_t) num_samples,
+                                                         (rt_uint8_t) num_channels,
+                                                         (rt_uint32_t) sample_rate,
+                                                         &write_status);
     if ((written_frames == 0u) && (num_samples > 0))
     {
-        LOG_W("PCM stream rejected decoded PCM, samples=%d", num_samples);
+        if (write_status != bt_a2dp_audio_last_write_status)
+        {
+            LOG_W("ES8311 playback rejected PCM: reason=%s, samples=%d, channels=%d, sample_rate=%d, running=%d, es8311_rate=%u, level=%u",
+                  bt_a2dp_audio_write_status_name(write_status),
+                  num_samples,
+                  num_channels,
+                  sample_rate,
+                  es8311_audio_is_playback_running(),
+                  es8311_audio_get_sample_rate(),
+                  es8311_audio_get_playback_level_frames());
+            bt_a2dp_audio_last_write_status = write_status;
+        }
+        return;
+    }
+
+    if (write_status == ES8311_AUDIO_PLAYBACK_WRITE_OK)
+    {
+        bt_a2dp_audio_last_write_status = ES8311_AUDIO_PLAYBACK_WRITE_OK;
     }
 }
 
@@ -138,18 +184,16 @@ static rt_err_t bt_a2dp_audio_parse_sbc_payload(const uint8_t * packet,
 
 rt_err_t bt_a2dp_audio_init(void)
 {
-    if (bt_pcm_stream_init() != RT_EOK)
-    {
-        LOG_E("bt_pcm_stream_init failed");
-        return -RT_ERROR;
-    }
-
     btstack_sbc_decoder_init(&bt_a2dp_audio_sbc_decoder_state,
                              SBC_MODE_STANDARD,
                              bt_a2dp_audio_handle_pcm,
                              RT_NULL);
     bt_a2dp_audio_inited = RT_TRUE;
     bt_a2dp_audio_first_pcm_logged = RT_FALSE;
+    bt_a2dp_audio_parse_error_logged = RT_FALSE;
+    bt_a2dp_audio_fragmented_logged = RT_FALSE;
+    bt_a2dp_audio_backpressure_logged = RT_FALSE;
+    bt_a2dp_audio_last_write_status = ES8311_AUDIO_PLAYBACK_WRITE_OK;
     return RT_EOK;
 }
 
@@ -166,6 +210,10 @@ void bt_a2dp_audio_reset(void)
                              bt_a2dp_audio_handle_pcm,
                              RT_NULL);
     bt_a2dp_audio_first_pcm_logged = RT_FALSE;
+    bt_a2dp_audio_parse_error_logged = RT_FALSE;
+    bt_a2dp_audio_fragmented_logged = RT_FALSE;
+    bt_a2dp_audio_backpressure_logged = RT_FALSE;
+    bt_a2dp_audio_last_write_status = ES8311_AUDIO_PLAYBACK_WRITE_OK;
 }
 
 void bt_a2dp_audio_process_media_packet(uint8_t local_seid, const uint8_t * packet, uint16_t size)
@@ -186,22 +234,45 @@ void bt_a2dp_audio_process_media_packet(uint8_t local_seid, const uint8_t * pack
     err = bt_a2dp_audio_parse_sbc_payload(packet, size, &sbc_payload, &sbc_payload_size, &sbc_header);
     if (err != RT_EOK)
     {
-        LOG_W("A2DP media packet parse failed, size=%u", size);
+        if (!bt_a2dp_audio_parse_error_logged)
+        {
+            bt_a2dp_audio_parse_error_logged = RT_TRUE;
+            LOG_W("A2DP media packet parse failed, size=%u", size);
+        }
         return;
     }
+    bt_a2dp_audio_parse_error_logged = RT_FALSE;
 
     // 这里只先处理最常见的非分片 SBC 包。
     // 如果后面遇到分片，再在这里补重组逻辑即可。
     if ((sbc_header.fragmentation != 0u) || (sbc_header.starting_packet != 0u) || (sbc_header.last_packet != 0u))
     {
-        LOG_W("A2DP SBC fragmentation is not handled yet");
+        if (!bt_a2dp_audio_fragmented_logged)
+        {
+            bt_a2dp_audio_fragmented_logged = RT_TRUE;
+            LOG_W("A2DP SBC fragmentation is not handled yet");
+        }
         return;
     }
+    bt_a2dp_audio_fragmented_logged = RT_FALSE;
 
     if (sbc_payload_size == 0u)
     {
         return;
     }
+
+    if (es8311_audio_get_playback_level_frames() >= BT_A2DP_AUDIO_BACKPRESSURE_LEVEL)
+    {
+        if (!bt_a2dp_audio_backpressure_logged)
+        {
+            bt_a2dp_audio_backpressure_logged = RT_TRUE;
+            LOG_W("A2DP media packet dropped by playback backpressure, level=%u, free=%u",
+                  es8311_audio_get_playback_level_frames(),
+                  es8311_audio_get_playback_free_frames());
+        }
+        return;
+    }
+    bt_a2dp_audio_backpressure_logged = RT_FALSE;
 
     btstack_sbc_decoder_process_data(&bt_a2dp_audio_sbc_decoder_state,
                                      0,

@@ -18,7 +18,7 @@
 static int bt_profiles_init(void)
 {
     // 这里只负责注册蓝牙 profile。
-    // 具体音频后端（WM / MAX）不在这里绑定，由 main 决定启用哪个后端。
+    // 当前工程只保留 ES8311 音频链路，具体音频启停在 A2DP 事件里控制。
     return bt_a2dp_sink_service_init();
 }
 

@@ -47,7 +47,7 @@
  * - 矩阵行输出，选通电平是高(1)还是低(0)
  */
 #ifndef KB_GPIO_ACTIVE_LEVEL
-#define KB_GPIO_ACTIVE_LEVEL 1u
+#define KB_GPIO_ACTIVE_LEVEL 0u
 #endif
 
 #ifndef KB_MATRIX_ACTIVE_LEVEL
@@ -78,9 +78,9 @@
 #define KB_BACKEND_MATRIX 2u
 #define KB_BACKEND_CUSTOM 3u
 
-/* 默认使用矩阵键盘，可在工程配置里覆写 */
+/* 当前工程使用独立 GPIO 按键，可在工程配置里覆写 */
 #ifndef KB_BACKEND_MODE
-#define KB_BACKEND_MODE KB_BACKEND_MATRIX
+#define KB_BACKEND_MODE KB_BACKEND_GPIO
 #endif
 
 /* 矩阵模式参数（仅矩阵后端使用） */

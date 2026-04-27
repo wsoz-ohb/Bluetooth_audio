@@ -13,13 +13,19 @@
 #define DBG_LVL DBG_LOG
 #include <rtdbg.h>
 #include "bt_app.h"
-#include "bt_i2s_player.h"
+#include "es8311_audio.h"
+#include "key_app.h"
 
 int main(void)
 {
-    if (bt_i2s_player_init() != RT_EOK)
+    if (es8311_audio_init() != RT_EOK)
     {
-        LOG_E("bt_i2s_player_init failed");
+        LOG_E("es8311_audio_init failed");
+    }
+
+    if (key_app_init() != RT_EOK)
+    {
+           LOG_E("key_app_init failed");
     }
 
     if (bt__init() != RT_EOK)

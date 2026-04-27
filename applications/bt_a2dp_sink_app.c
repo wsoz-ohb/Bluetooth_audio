@@ -7,7 +7,7 @@
 
 #include "bt_a2dp_audio.h"
 #include "bt_config.h"
-#include "bt_pcm_stream.h"
+#include "es8311_audio.h"
 #include "btstack_event.h"
 #include "btstack_util.h"
 #include "hci.h"
@@ -25,7 +25,6 @@
 #define BT_APP_A2DP_SINK_CODEC_INFORMATION_SIZE   4u
 #define BT_APP_A2DP_SINK_MIN_BITPOOL              2u
 #define BT_APP_A2DP_SINK_MAX_BITPOOL              53u
-
 static btstack_packet_callback_registration_t bt_app_hci_event_callback_registration;
 static avdtp_stream_endpoint_t * bt_app_a2dp_sink_sep = RT_NULL;
 static uint8_t bt_app_a2dp_sink_sdp_record[BT_APP_A2DP_SINK_SDP_RECORD_SIZE];
@@ -58,11 +57,78 @@ static const avdtp_configuration_sbc_t bt_app_a2dp_sbc_preferred_configuration =
 
 static uint16_t bt_app_a2dp_cid = 0u;
 static uint8_t bt_app_a2dp_local_seid = 0u;
+static rt_uint32_t bt_app_a2dp_sample_rate = ES8311_AUDIO_DEFAULT_SAMPLE_RATE;
+static rt_bool_t bt_app_a2dp_media_allowed = RT_FALSE;
+static rt_bool_t bt_app_a2dp_media_drop_logged = RT_FALSE;
+static rt_bool_t bt_app_a2dp_playback_error_logged = RT_FALSE;
+
+static rt_bool_t bt_app_a2dp_ensure_playback_started(const char * reason)
+{
+    if (es8311_audio_is_playback_running())
+    {
+        bt_app_a2dp_playback_error_logged = RT_FALSE;
+        return RT_TRUE;
+    }
+
+    if (es8311_audio_configure(bt_app_a2dp_sample_rate, 2u) != RT_EOK)
+    {
+        if (!bt_app_a2dp_playback_error_logged)
+        {
+            bt_app_a2dp_playback_error_logged = RT_TRUE;
+            LOG_E("es8311_audio_configure failed before playback, reason=%s, sample_rate=%u",
+                  reason,
+                  bt_app_a2dp_sample_rate);
+        }
+        return RT_FALSE;
+    }
+
+    if (es8311_audio_start_playback() != RT_EOK)
+    {
+        if (!bt_app_a2dp_playback_error_logged)
+        {
+            bt_app_a2dp_playback_error_logged = RT_TRUE;
+            LOG_E("es8311_audio_start_playback failed, reason=%s", reason);
+        }
+        return RT_FALSE;
+    }
+
+    bt_app_a2dp_playback_error_logged = RT_FALSE;
+    LOG_I("A2DP playback armed, reason=%s, sample_rate=%u", reason, bt_app_a2dp_sample_rate);
+    return RT_TRUE;
+}
+
+static void bt_app_a2dp_stop_playback(void)
+{
+    bt_app_a2dp_playback_error_logged = RT_FALSE;
+    es8311_audio_stop_playback();
+    es8311_audio_flush_playback();
+}
 
 static void bt_app_a2dp_sink_media_handler(uint8_t local_seid, uint8_t * packet, uint16_t size)
 {
     // 协议层只负责把媒体包转交给音频层。
-    // 音频层会继续完成：RTP/SBC 头解析 -> SBC 解码 -> PCM 写入公共 PCM stream。
+    if ((bt_app_a2dp_local_seid != 0u) && (local_seid != bt_app_a2dp_local_seid))
+    {
+        if (!bt_app_a2dp_media_drop_logged)
+        {
+            bt_app_a2dp_media_drop_logged = RT_TRUE;
+            LOG_W("A2DP media packet ignored, local_seid mismatch: got=%u, expected=%u",
+                  local_seid,
+                  bt_app_a2dp_local_seid);
+        }
+        return;
+    }
+
+    if (!bt_app_a2dp_media_allowed)
+    {
+        if (!bt_app_a2dp_media_drop_logged)
+        {
+            bt_app_a2dp_media_drop_logged = RT_TRUE;
+            LOG_W("A2DP media packet ignored, stream is not active");
+        }
+        return;
+    }
+
     bt_a2dp_audio_process_media_packet(local_seid, packet, size);
 }
 
@@ -101,12 +167,11 @@ static void bt_app_handle_a2dp_meta_event(uint8_t * packet)
 
         sample_rate = a2dp_subevent_signaling_media_codec_sbc_configuration_get_sampling_frequency(packet);
 
-        // 这里开始不再直接控制某个具体后端，
-        // 而是只把当前流的格式和生命周期同步给公共 PCM stream。
         bt_a2dp_audio_reset();
-        if (bt_pcm_stream_configure(sample_rate, 2u) != RT_EOK)
+        bt_app_a2dp_sample_rate = sample_rate;
+        if (es8311_audio_configure(sample_rate, 2u) != RT_EOK)
         {
-            LOG_W("bt_pcm_stream_configure failed");
+            LOG_W("es8311_audio_configure failed");
         }
         LOG_I("A2DP SBC config: freq=%u, mode=%u, blocks=%u, subbands=%u, alloc=%u, bitpool=%u-%u",
               sample_rate,
@@ -136,6 +201,9 @@ static void bt_app_handle_a2dp_meta_event(uint8_t * packet)
 
         bt_app_a2dp_cid = a2dp_subevent_stream_established_get_a2dp_cid(packet);
         bt_app_a2dp_local_seid = a2dp_subevent_stream_established_get_local_seid(packet);
+        bt_app_a2dp_media_allowed = RT_FALSE;
+        bt_app_a2dp_media_drop_logged = RT_FALSE;
+        bt_app_a2dp_playback_error_logged = RT_FALSE;
         LOG_I("A2DP stream established, remote=%s, cid=0x%04x, local_seid=%u, remote_seid=%u",
               bd_addr_to_str(remote_addr),
               bt_app_a2dp_cid,
@@ -145,35 +213,47 @@ static void bt_app_handle_a2dp_meta_event(uint8_t * packet)
     }
 
     case A2DP_SUBEVENT_STREAM_STARTED:
-        if (bt_pcm_stream_start() != RT_EOK)
+        if (bt_app_a2dp_ensure_playback_started("stream_started"))
         {
-            LOG_E("bt_pcm_stream_start failed");
+            bt_app_a2dp_media_allowed = RT_TRUE;
+            bt_app_a2dp_media_drop_logged = RT_FALSE;
+            LOG_I("A2DP stream started, cid=0x%04x, local_seid=%u",
+                  a2dp_subevent_stream_started_get_a2dp_cid(packet),
+                  a2dp_subevent_stream_started_get_local_seid(packet));
         }
-        LOG_I("A2DP stream started, cid=0x%04x, local_seid=%u",
-              a2dp_subevent_stream_started_get_a2dp_cid(packet),
-              a2dp_subevent_stream_started_get_local_seid(packet));
+        else
+        {
+            bt_app_a2dp_media_allowed = RT_FALSE;
+            LOG_E("A2DP stream started but local playback is not armed, cid=0x%04x, local_seid=%u",
+                  a2dp_subevent_stream_started_get_a2dp_cid(packet),
+                  a2dp_subevent_stream_started_get_local_seid(packet));
+        }
         break;
 
     case A2DP_SUBEVENT_STREAM_SUSPENDED:
-        bt_pcm_stream_stop();
-        bt_pcm_stream_flush();
+        bt_app_a2dp_media_allowed = RT_FALSE;
+        bt_app_a2dp_media_drop_logged = RT_FALSE;
+        bt_app_a2dp_stop_playback();
         LOG_I("A2DP stream suspended, cid=0x%04x, local_seid=%u",
               a2dp_subevent_stream_suspended_get_a2dp_cid(packet),
               a2dp_subevent_stream_suspended_get_local_seid(packet));
         break;
 
     case A2DP_SUBEVENT_STREAM_STOPPED:
-        bt_pcm_stream_stop();
-        bt_pcm_stream_flush();
+        bt_app_a2dp_media_allowed = RT_FALSE;
+        bt_app_a2dp_media_drop_logged = RT_FALSE;
+        bt_app_a2dp_stop_playback();
         LOG_I("A2DP stream stopped, cid=0x%04x, local_seid=%u",
               a2dp_subevent_stream_stopped_get_a2dp_cid(packet),
               a2dp_subevent_stream_stopped_get_local_seid(packet));
         break;
 
     case A2DP_SUBEVENT_STREAM_RELEASED:
-        bt_pcm_stream_stop();
-        bt_pcm_stream_flush();
+        bt_app_a2dp_media_allowed = RT_FALSE;
+        bt_app_a2dp_media_drop_logged = RT_FALSE;
+        bt_app_a2dp_stop_playback();
         bt_a2dp_audio_reset();
+        bt_app_a2dp_sample_rate = ES8311_AUDIO_DEFAULT_SAMPLE_RATE;
         LOG_I("A2DP stream released, cid=0x%04x, local_seid=%u",
               a2dp_subevent_stream_released_get_a2dp_cid(packet),
               a2dp_subevent_stream_released_get_local_seid(packet));
@@ -181,9 +261,11 @@ static void bt_app_handle_a2dp_meta_event(uint8_t * packet)
         break;
 
     case A2DP_SUBEVENT_SIGNALING_CONNECTION_RELEASED:
-        bt_pcm_stream_stop();
-        bt_pcm_stream_flush();
+        bt_app_a2dp_media_allowed = RT_FALSE;
+        bt_app_a2dp_media_drop_logged = RT_FALSE;
+        bt_app_a2dp_stop_playback();
         bt_a2dp_audio_reset();
+        bt_app_a2dp_sample_rate = ES8311_AUDIO_DEFAULT_SAMPLE_RATE;
         LOG_I("A2DP signaling released, cid=0x%04x",
               a2dp_subevent_signaling_connection_released_get_a2dp_cid(packet));
         bt_app_a2dp_cid = 0u;
@@ -240,9 +322,9 @@ rt_err_t bt_a2dp_sink_service_init(void)
         return -RT_ERROR;
     }
 
-    if (bt_pcm_stream_init() != RT_EOK)
+    if (!es8311_audio_is_inited())
     {
-        LOG_E("bt_pcm_stream_init failed");
+        LOG_E("es8311 audio is not initialized");
         return -RT_ERROR;
     }
 
