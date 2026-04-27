@@ -10,7 +10,7 @@
 #include "stm32f4xx_hal_i2s_ex.h"
 
 #define DBG_TAG "es8311_audio"
-#define DBG_LVL DBG_INFO
+#define DBG_LVL DBG_WARNING
 #include <rtdbg.h>
 
 #define ES8311_AUDIO_PLAYBACK_OUTPUT_CHANNELS        2u
@@ -59,6 +59,10 @@ typedef struct
     rt_uint32_t capture_drop_frames;
     rt_uint32_t sample_rate;
     rt_uint8_t playback_channels;
+    rt_uint8_t capture_slot;
+    rt_bool_t capture_slot_locked;
+    rt_bool_t capture_diag_printed;
+    rt_bool_t capture_saturated_notice_printed;
     es8311_audio_ring_t playback_ring;
     es8311_audio_ring_t capture_ring;
 } es8311_audio_context_t;
@@ -68,6 +72,14 @@ static rt_uint16_t es8311_audio_dma_tx_buffer[ES8311_AUDIO_DMA_TX_SAMPLES];
 static rt_uint16_t es8311_audio_dma_rx_buffer[ES8311_AUDIO_DMA_RX_SAMPLES];
 static rt_int16_t es8311_audio_playback_buffer[ES8311_AUDIO_PLAYBACK_BUFFER_SAMPLES];
 static rt_int16_t es8311_audio_capture_buffer[ES8311_AUDIO_CAPTURE_BUFFER_SAMPLES];
+
+typedef struct
+{
+    rt_int16_t min;
+    rt_int16_t max;
+    rt_uint32_t saturated;
+    rt_uint32_t zero;
+} es8311_audio_slot_stats_t;
 
 static void es8311_audio_fill_tx_range(rt_size_t offset_frames, rt_size_t frames);
 static void es8311_audio_rx_dma_half_callback(DMA_HandleTypeDef * hdma);
@@ -116,12 +128,82 @@ static void es8311_audio_reset_capture_ring_locked(void)
     es8311_audio_ctx.capture_ring.level = 0u;
     es8311_audio_ctx.capture_overflow_notice_printed = RT_FALSE;
     es8311_audio_ctx.capture_drop_frames = 0u;
+    es8311_audio_ctx.capture_slot = 0u;
+    es8311_audio_ctx.capture_slot_locked = RT_FALSE;
+    es8311_audio_ctx.capture_diag_printed = RT_FALSE;
+    es8311_audio_ctx.capture_saturated_notice_printed = RT_FALSE;
 }
 
 static void es8311_audio_clear_dma_buffers(void)
 {
     rt_memset(es8311_audio_dma_tx_buffer, 0, sizeof(es8311_audio_dma_tx_buffer));
     rt_memset(es8311_audio_dma_rx_buffer, 0, sizeof(es8311_audio_dma_rx_buffer));
+}
+
+static void es8311_audio_collect_slot_stats(const rt_uint16_t * source,
+                                            rt_uint32_t frames,
+                                            rt_uint8_t slot,
+                                            es8311_audio_slot_stats_t * stats)
+{
+    rt_uint32_t frame_index;
+
+    stats->min = INT16_MAX;
+    stats->max = INT16_MIN;
+    stats->saturated = 0u;
+    stats->zero = 0u;
+
+    for (frame_index = 0u; frame_index < frames; frame_index++)
+    {
+        rt_int16_t sample;
+
+        sample = (rt_int16_t) source[(rt_size_t) frame_index * ES8311_AUDIO_PLAYBACK_OUTPUT_CHANNELS + slot];
+        if (sample < stats->min)
+        {
+            stats->min = sample;
+        }
+        if (sample > stats->max)
+        {
+            stats->max = sample;
+        }
+        if ((sample == INT16_MIN) || (sample == INT16_MAX))
+        {
+            stats->saturated++;
+        }
+        if (sample == 0)
+        {
+            stats->zero++;
+        }
+    }
+}
+
+static rt_uint8_t es8311_audio_pick_capture_slot(const es8311_audio_slot_stats_t * left,
+                                                 const es8311_audio_slot_stats_t * right,
+                                                 rt_uint32_t frames)
+{
+    if (left->saturated == frames && right->saturated < frames)
+    {
+        return 1u;
+    }
+    if (right->saturated == frames && left->saturated < frames)
+    {
+        return 0u;
+    }
+    if (left->zero == frames && right->zero < frames)
+    {
+        return 1u;
+    }
+    if (right->zero == frames && left->zero < frames)
+    {
+        return 0u;
+    }
+
+    return 0u;
+}
+
+static rt_bool_t es8311_audio_slot_stats_saturated(const es8311_audio_slot_stats_t * stats,
+                                                   rt_uint32_t frames)
+{
+    return (rt_bool_t) ((frames > 0u) && (stats->saturated == frames));
 }
 
 static void es8311_audio_drop_oldest_playback_frames_locked(rt_uint32_t frames)
@@ -195,14 +277,14 @@ static rt_err_t es8311_audio_dma_init(void)
 
     rt_memset(&es8311_audio_ctx.hdma_i2s2_rx, 0, sizeof(es8311_audio_ctx.hdma_i2s2_rx));
     es8311_audio_ctx.hdma_i2s2_rx.Instance = DMA1_Stream3;
-    es8311_audio_ctx.hdma_i2s2_rx.Init.Channel = DMA_CHANNEL_0;
+    es8311_audio_ctx.hdma_i2s2_rx.Init.Channel = DMA_CHANNEL_3;
     es8311_audio_ctx.hdma_i2s2_rx.Init.Direction = DMA_PERIPH_TO_MEMORY;
     es8311_audio_ctx.hdma_i2s2_rx.Init.PeriphInc = DMA_PINC_DISABLE;
     es8311_audio_ctx.hdma_i2s2_rx.Init.MemInc = DMA_MINC_ENABLE;
     es8311_audio_ctx.hdma_i2s2_rx.Init.PeriphDataAlignment = DMA_PDATAALIGN_HALFWORD;
     es8311_audio_ctx.hdma_i2s2_rx.Init.MemDataAlignment = DMA_MDATAALIGN_HALFWORD;
     es8311_audio_ctx.hdma_i2s2_rx.Init.Mode = DMA_CIRCULAR;
-    es8311_audio_ctx.hdma_i2s2_rx.Init.Priority = DMA_PRIORITY_VERY_HIGH;
+    es8311_audio_ctx.hdma_i2s2_rx.Init.Priority = DMA_PRIORITY_MEDIUM;
     es8311_audio_ctx.hdma_i2s2_rx.Init.FIFOMode = DMA_FIFOMODE_DISABLE;
 
     hal_status = HAL_DMA_Init(&es8311_audio_ctx.hdma_i2s2_rx);
@@ -221,7 +303,7 @@ static rt_err_t es8311_audio_dma_init(void)
     es8311_audio_ctx.hdma_i2s2_tx.Init.PeriphDataAlignment = DMA_PDATAALIGN_HALFWORD;
     es8311_audio_ctx.hdma_i2s2_tx.Init.MemDataAlignment = DMA_MDATAALIGN_HALFWORD;
     es8311_audio_ctx.hdma_i2s2_tx.Init.Mode = DMA_CIRCULAR;
-    es8311_audio_ctx.hdma_i2s2_tx.Init.Priority = DMA_PRIORITY_VERY_HIGH;
+    es8311_audio_ctx.hdma_i2s2_tx.Init.Priority = DMA_PRIORITY_MEDIUM;
     es8311_audio_ctx.hdma_i2s2_tx.Init.FIFOMode = DMA_FIFOMODE_DISABLE;
 
     hal_status = HAL_DMA_Init(&es8311_audio_ctx.hdma_i2s2_tx);
@@ -234,9 +316,9 @@ static rt_err_t es8311_audio_dma_init(void)
     __HAL_LINKDMA(&hi2s2, hdmarx, es8311_audio_ctx.hdma_i2s2_rx);
     __HAL_LINKDMA(&hi2s2, hdmatx, es8311_audio_ctx.hdma_i2s2_tx);
 
-    HAL_NVIC_SetPriority(DMA1_Stream3_IRQn, 0, 1);
+    HAL_NVIC_SetPriority(DMA1_Stream3_IRQn, 2, 0);
     HAL_NVIC_EnableIRQ(DMA1_Stream3_IRQn);
-    HAL_NVIC_SetPriority(DMA1_Stream4_IRQn, 0, 1);
+    HAL_NVIC_SetPriority(DMA1_Stream4_IRQn, 2, 0);
     HAL_NVIC_EnableIRQ(DMA1_Stream4_IRQn);
 
     es8311_audio_ctx.dma_inited = RT_TRUE;
@@ -483,13 +565,59 @@ static void es8311_audio_write_capture_mono(const rt_uint16_t * source, rt_uint3
     rt_uint32_t frame_index;
     rt_bool_t log_overflow;
     rt_base_t level;
+    rt_uint8_t capture_slot;
 
     if (!es8311_audio_ctx.capture_running)
     {
         return;
     }
 
+    if (!es8311_audio_ctx.capture_slot_locked)
+    {
+        es8311_audio_slot_stats_t left;
+        es8311_audio_slot_stats_t right;
+        rt_bool_t left_saturated;
+        rt_bool_t right_saturated;
+
+        es8311_audio_collect_slot_stats(source, frames, 0u, &left);
+        es8311_audio_collect_slot_stats(source, frames, 1u, &right);
+        left_saturated = es8311_audio_slot_stats_saturated(&left, frames);
+        right_saturated = es8311_audio_slot_stats_saturated(&right, frames);
+        es8311_audio_ctx.capture_slot = es8311_audio_pick_capture_slot(&left, &right, frames);
+
+        if (!es8311_audio_ctx.capture_diag_printed)
+        {
+            es8311_audio_ctx.capture_diag_printed = RT_TRUE;
+            LOG_I("capture slot diag: left[min=%d max=%d sat=%u zero=%u] right[min=%d max=%d sat=%u zero=%u] pick=%s",
+                  left.min,
+                  left.max,
+                  left.saturated,
+                  left.zero,
+                  right.min,
+                  right.max,
+                  right.saturated,
+                  right.zero,
+                  (es8311_audio_ctx.capture_slot == 0u) ? "left" : "right");
+        }
+
+        if (left_saturated && right_saturated)
+        {
+            if (!es8311_audio_ctx.capture_saturated_notice_printed)
+            {
+                es8311_audio_ctx.capture_saturated_notice_printed = RT_TRUE;
+                LOG_W("capture RX saturated on both slots, drop this DMA half");
+            }
+            level = rt_hw_interrupt_disable();
+            es8311_audio_ctx.capture_drop_frames += frames;
+            rt_hw_interrupt_enable(level);
+            return;
+        }
+
+        es8311_audio_ctx.capture_slot_locked = RT_TRUE;
+    }
+
     log_overflow = RT_FALSE;
+    capture_slot = es8311_audio_ctx.capture_slot;
     level = rt_hw_interrupt_disable();
     for (frame_index = 0u; frame_index < frames; frame_index++)
     {
@@ -507,7 +635,7 @@ static void es8311_audio_write_capture_mono(const rt_uint16_t * source, rt_uint3
             break;
         }
 
-        sample = (rt_int16_t) source[(rt_size_t) frame_index * ES8311_AUDIO_PLAYBACK_OUTPUT_CHANNELS];
+        sample = (rt_int16_t) source[(rt_size_t) frame_index * ES8311_AUDIO_PLAYBACK_OUTPUT_CHANNELS + capture_slot];
         es8311_audio_capture_buffer[es8311_audio_ctx.capture_ring.write] = sample;
         es8311_audio_ctx.capture_ring.write++;
         if (es8311_audio_ctx.capture_ring.write >= ES8311_AUDIO_CAPTURE_BUFFER_SAMPLES)
@@ -714,6 +842,11 @@ rt_err_t es8311_audio_set_run_mode(es8311_audio_run_mode_t mode)
 
         es8311_audio_stop_playback();
         es8311_audio_flush_playback();
+        if (es8311_audio_i2s_reconfigure(ES8311_AUDIO_DEFAULT_SAMPLE_RATE) != RT_EOK)
+        {
+            LOG_E("switch capture sample rate failed: %u", ES8311_AUDIO_DEFAULT_SAMPLE_RATE);
+            return -RT_ERROR;
+        }
         err = es8311_audio_start_capture();
         if (err == RT_EOK)
         {
@@ -1255,10 +1388,14 @@ void HAL_I2S_ErrorCallback(I2S_HandleTypeDef * hi2s)
 
 void DMA1_Stream3_IRQHandler(void)
 {
+    rt_interrupt_enter();
     HAL_DMA_IRQHandler(&es8311_audio_ctx.hdma_i2s2_rx);
+    rt_interrupt_leave();
 }
 
 void DMA1_Stream4_IRQHandler(void)
 {
+    rt_interrupt_enter();
     HAL_DMA_IRQHandler(&es8311_audio_ctx.hdma_i2s2_tx);
+    rt_interrupt_leave();
 }

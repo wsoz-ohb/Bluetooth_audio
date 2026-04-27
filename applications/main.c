@@ -10,7 +10,7 @@
 
 #include <rtthread.h>
 #define DBG_TAG "main"
-#define DBG_LVL DBG_LOG
+#define DBG_LVL DBG_WARNING
 #include <rtdbg.h>
 #include "bt_app.h"
 #include "es8311_audio.h"
@@ -23,14 +23,14 @@ int main(void)
         LOG_E("es8311_audio_init failed");
     }
 
-    if (key_app_init() != RT_EOK)
-    {
-           LOG_E("key_app_init failed");
-    }
-
     if (bt__init() != RT_EOK)
     {
         LOG_E("bt__init failed");
+    }
+
+    if (key_app_init() != RT_EOK)
+    {
+           LOG_E("key_app_init failed");
     }
 
     while (1)

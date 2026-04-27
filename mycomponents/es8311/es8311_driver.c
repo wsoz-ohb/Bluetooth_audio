@@ -3,7 +3,7 @@
 #include <string.h>
 
 #define DBG_TAG "es8311"
-#define DBG_LVL DBG_INFO
+#define DBG_LVL DBG_WARNING
 #include <rtdbg.h>
 
 #define ES8311_RESET_REG                 0x00u
@@ -34,6 +34,7 @@
 #define ES8311_DAC2_REG                  0x32u
 #define ES8311_DAC6_REG                  0x37u
 #define ES8311_GPIO_REG                  0x44u
+#define ES8311_GP_REG                    0x45u
 #define ES8311_CHIPID1_REG               0xFDu
 #define ES8311_CHIPID2_REG               0xFEu
 
@@ -60,20 +61,21 @@
 #define ES8311_SYS8_PDN_DAC              (1u << 1)
 #define ES8311_SYS9_HPSW                 (1u << 4)
 #define ES8311_SYS9_PDN_ADC              (1u << 0)
+#define ES8311_SYS10_DMIC_ON             (1u << 6)
+#define ES8311_SYS10_ANALOG_MIC_ENABLE   0x1Au
 
 #define ES8311_DAC1_DSM_MUTE             (1u << 6)
 #define ES8311_DAC1_DEM_MUTE             (1u << 5)
 #define ES8311_DAC1_MUTE_MASK            (ES8311_DAC1_DSM_MUTE | ES8311_DAC1_DEM_MUTE)
 
-#define ES8311_ADC1_DMIC_SEL             (1u << 6)
-#define ES8311_ADC1_PGA_GAIN_MASK        0x0Fu
-#define ES8311_ADC2_MUTE                 (1u << 7)
-#define ES8311_ADC2_VOLUME_DEFAULT       0x00u
-#define ES8311_ADC3_DEFAULT              0x20u
+#define ES8311_ADC1_RECORD_DEFAULT       0x40u
+#define ES8311_ADC2_INPUT_BOOST          0x20u
+#define ES8311_ADC2_GAIN_SCALE_MASK      0x0Fu
+#define ES8311_ADC3_VOLUME_DEFAULT       0xBFu
 #define ES8311_ADC4_DEFAULT              0x0Cu
 #define ES8311_ADC5_DEFAULT              0x00u
 #define ES8311_ADC6_DEFAULT              0x30u
-#define ES8311_ADC7_DEFAULT              0x10u
+#define ES8311_ADC7_DEFAULT              0x0Au
 #define ES8311_ADC8_DEFAULT              0x6Au
 
 #define ES8311_CHIPID1_VALUE             0x83u
@@ -83,6 +85,8 @@
 #define ES8311_I2C_RETRY_DELAY_MS        2u
 #define ES8311_VMID_STARTUP_DELAY_MS     20u
 #define ES8311_DEFAULT_DAC_VOLUME        0xC0u
+#define ES8311_POWER_UP_ANALOG           0x01u
+#define ES8311_POWER_UP_ADC_DAC          0x02u
 #define ES8311_PLAYBACK_BCLK_CFG         0x03u
 #define ES8311_PLAYBACK_LRCK_HIGH        0x00u
 #define ES8311_PLAYBACK_LRCK_LOW         0xFFu
@@ -109,7 +113,7 @@ static void es8311_load_default_config(es8311_config_t * config)
     config->use_mclk = (rt_bool_t) ES8311_DEFAULT_USE_MCLK;
     config->dac_source = ES8311_DAC_SOURCE_LEFT;
     config->input_mode = ES8311_INPUT_MIC;
-    config->mic_gain = ES8311_MIC_GAIN_24DB;
+    config->mic_gain = ES8311_MIC_GAIN_0DB;
 }
 
 static rt_err_t es8311_write_register(rt_uint8_t reg, rt_uint8_t value)
@@ -513,35 +517,44 @@ static rt_err_t es8311_apply_playback_defaults(const es8311_config_t * config)
 
 static rt_err_t es8311_apply_record_defaults(const es8311_config_t * config)
 {
-    rt_uint8_t adc1;
+    rt_uint8_t sys10;
+    rt_uint8_t pga_gain;
 
     if (config == RT_NULL)
     {
         return -RT_EINVAL;
     }
 
-    adc1 = es8311_mic_gain_to_reg(config->mic_gain);
-    if (adc1 == 0xFFu)
+    pga_gain = es8311_mic_gain_to_reg(config->mic_gain);
+    if (pga_gain == 0xFFu)
     {
         return -RT_EINVAL;
     }
 
+    sys10 = ES8311_SYS10_ANALOG_MIC_ENABLE;
     if (config->input_mode == ES8311_INPUT_DMIC)
     {
-        adc1 |= ES8311_ADC1_DMIC_SEL;
+        sys10 |= ES8311_SYS10_DMIC_ON;
     }
 
-    if (es8311_write_register(ES8311_ADC1_REG, adc1) != RT_EOK)
+    if (es8311_write_register(ES8311_SYS10_REG, sys10) != RT_EOK)
     {
         return -RT_ERROR;
     }
 
-    if (es8311_write_register(ES8311_ADC2_REG, ES8311_ADC2_VOLUME_DEFAULT) != RT_EOK)
+    if (es8311_write_register(ES8311_ADC1_REG, ES8311_ADC1_RECORD_DEFAULT) != RT_EOK)
     {
         return -RT_ERROR;
     }
 
-    if (es8311_write_register(ES8311_ADC3_REG, ES8311_ADC3_DEFAULT) != RT_EOK)
+    if (es8311_write_register(ES8311_ADC2_REG,
+                              (rt_uint8_t) (ES8311_ADC2_INPUT_BOOST |
+                                            (pga_gain & ES8311_ADC2_GAIN_SCALE_MASK))) != RT_EOK)
+    {
+        return -RT_ERROR;
+    }
+
+    if (es8311_write_register(ES8311_ADC3_REG, ES8311_ADC3_VOLUME_DEFAULT) != RT_EOK)
     {
         return -RT_ERROR;
     }
@@ -567,6 +580,11 @@ static rt_err_t es8311_apply_record_defaults(const es8311_config_t * config)
     }
 
     if (es8311_write_register(ES8311_ADC8_REG, ES8311_ADC8_DEFAULT) != RT_EOK)
+    {
+        return -RT_ERROR;
+    }
+
+    if (es8311_write_register(ES8311_GP_REG, 0x00u) != RT_EOK)
     {
         return -RT_ERROR;
     }
@@ -690,7 +708,7 @@ rt_err_t es8311_start_playback(void)
         return -RT_ERROR;
     }
 
-    if (es8311_write_register(ES8311_SYS3_REG, 0x01u) != RT_EOK)
+    if (es8311_write_register(ES8311_SYS3_REG, ES8311_POWER_UP_ANALOG) != RT_EOK)
     {
         return -RT_ERROR;
     }
@@ -771,19 +789,29 @@ rt_err_t es8311_start_record(void)
         return -RT_ERROR;
     }
 
-    if (es8311_write_register(ES8311_SYS3_REG, 0x09u) != RT_EOK)
+    if (es8311_write_register(ES8311_SYS3_REG, ES8311_POWER_UP_ANALOG) != RT_EOK)
     {
         return -RT_ERROR;
     }
 
     rt_thread_mdelay(ES8311_VMID_STARTUP_DELAY_MS);
 
+    if (es8311_write_register(ES8311_SYS4_REG, ES8311_POWER_UP_ADC_DAC) != RT_EOK)
+    {
+        return -RT_ERROR;
+    }
+
+    if (es8311_write_register(ES8311_SYS8_REG, 0x00u) != RT_EOK)
+    {
+        return -RT_ERROR;
+    }
+
     if (es8311_update_register(ES8311_SYS9_REG, ES8311_SYS9_PDN_ADC, 0u) != RT_EOK)
     {
         return -RT_ERROR;
     }
 
-    if (es8311_update_register(ES8311_ADC2_REG, ES8311_ADC2_MUTE, 0u) != RT_EOK)
+    if (es8311_update_register(ES8311_SDPOUT_REG, ES8311_SDP_MUTE, 0u) != RT_EOK)
     {
         return -RT_ERROR;
     }
@@ -807,7 +835,7 @@ rt_err_t es8311_stop_record(void)
         return RT_EOK;
     }
 
-    (void) es8311_update_register(ES8311_ADC2_REG, ES8311_ADC2_MUTE, ES8311_ADC2_MUTE);
+    (void) es8311_update_register(ES8311_SDPOUT_REG, ES8311_SDP_MUTE, ES8311_SDP_MUTE);
     (void) es8311_update_register(ES8311_SYS9_REG, ES8311_SYS9_PDN_ADC, ES8311_SYS9_PDN_ADC);
 
     es8311_ctx.record_started = RT_FALSE;
@@ -829,7 +857,7 @@ rt_err_t es8311_set_mic_gain(es8311_mic_gain_t mic_gain)
 
     if (es8311_ctx.record_started)
     {
-        if (es8311_update_register(ES8311_ADC1_REG, ES8311_ADC1_PGA_GAIN_MASK, reg_value) != RT_EOK)
+        if (es8311_update_register(ES8311_ADC2_REG, ES8311_ADC2_GAIN_SCALE_MASK, reg_value) != RT_EOK)
         {
             return -RT_ERROR;
         }

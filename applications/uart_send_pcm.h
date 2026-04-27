@@ -13,6 +13,7 @@ extern "C" {
 #endif
 
 rt_err_t uart_send_pcm_start(void);
+void uart_send_pcm_stop(void);
 
 #if defined(__cplusplus)
 }

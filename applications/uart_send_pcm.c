@@ -10,7 +10,7 @@
 #include "es8311_audio.h"
 
 #define DBG_TAG "uart_send_pcm"
-#define DBG_LVL DBG_INFO
+#define DBG_LVL DBG_WARNING
 #include <rtdbg.h>
 
 #define UART_SEND_PCM_DEVICE_NAME       "uart3"
@@ -24,6 +24,15 @@ static rt_device_t uart_send_pcm_device;
 static rt_thread_t uart_send_pcm_thread;
 static rt_bool_t uart_send_pcm_running = RT_FALSE;
 static rt_int16_t uart_send_pcm_buffer[UART_SEND_PCM_READ_FRAMES];
+
+static void uart_send_pcm_close_device(void)
+{
+    if (uart_send_pcm_device != RT_NULL)
+    {
+        (void) rt_device_close(uart_send_pcm_device);
+        uart_send_pcm_device = RT_NULL;
+    }
+}
 
 static rt_err_t uart_send_pcm_open_device(void)
 {
@@ -89,6 +98,7 @@ static void uart_send_pcm_thread_entry(void * parameter)
     if (uart_send_pcm_open_device() != RT_EOK)
     {
         uart_send_pcm_running = RT_FALSE;
+        uart_send_pcm_thread = RT_NULL;
         return;
     }
 
@@ -106,6 +116,9 @@ static void uart_send_pcm_thread_entry(void * parameter)
         uart_send_pcm_write_all((const rt_uint8_t *) uart_send_pcm_buffer,
                                 (rt_size_t) frames * sizeof(uart_send_pcm_buffer[0]));
     }
+
+    uart_send_pcm_close_device();
+    uart_send_pcm_thread = RT_NULL;
 }
 
 rt_err_t uart_send_pcm_start(void)
@@ -131,4 +144,21 @@ rt_err_t uart_send_pcm_start(void)
 
     rt_thread_startup(uart_send_pcm_thread);
     return RT_EOK;
+}
+
+void uart_send_pcm_stop(void)
+{
+    rt_uint32_t wait_ms;
+
+    if (!uart_send_pcm_running && (uart_send_pcm_thread == RT_NULL))
+    {
+        return;
+    }
+
+    uart_send_pcm_running = RT_FALSE;
+
+    for (wait_ms = 0u; (wait_ms < 100u) && (uart_send_pcm_thread != RT_NULL); wait_ms++)
+    {
+        rt_thread_mdelay(1);
+    }
 }

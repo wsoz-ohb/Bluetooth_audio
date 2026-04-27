@@ -19,7 +19,7 @@
 
 #define BTSTACK_PORT_THREAD_NAME       "btstack"
 #define BTSTACK_PORT_THREAD_STACK_SIZE 4096
-#define BTSTACK_PORT_THREAD_PRIORITY   11
+#define BTSTACK_PORT_THREAD_PRIORITY   9
 #define BTSTACK_PORT_THREAD_TICK       10
 
 static rt_bool_t btstack_port_inited = RT_FALSE;

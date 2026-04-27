@@ -13,7 +13,7 @@
 #include "uart_send_pcm.h"
 
 #define DBG_TAG "key_app"
-#define DBG_LVL DBG_INFO
+#define DBG_LVL DBG_WARNING
 #include <rtdbg.h>
 
 #define KEY_APP_RECORD_KEY_ID          1u
@@ -23,8 +23,7 @@
 #define KEY_APP_THREAD_PRIORITY        19
 #define KEY_APP_THREAD_TICK            10
 #define KEY_APP_POLL_MS                10u
-#define KEY_APP_EVT_START_CAPTURE      (1u << 0)
-#define KEY_APP_EVT_STOP_CAPTURE       (1u << 1)
+#define KEY_APP_EVT_TOGGLE_CAPTURE     (1u << 0)
 
 static keyboard_control_t key_app_keyboard;
 static rt_thread_t key_app_thread;
@@ -51,13 +50,9 @@ static void key_app_event_cb(const char *keyname, uint16_t key_id, kb_event_t ev
         return;
     }
 
-    if (evt == KB_EVT_LONGPRESS)
+    if (evt == KB_EVT_DOUBLE_CLICK)
     {
-        (void)rt_event_send(&key_app_event, KEY_APP_EVT_START_CAPTURE);
-    }
-    else if (evt == KB_EVT_LONGPRESS_RELEASE)
-    {
-        (void)rt_event_send(&key_app_event, KEY_APP_EVT_STOP_CAPTURE);
+        (void)rt_event_send(&key_app_event, KEY_APP_EVT_TOGGLE_CAPTURE);
     }
 }
 
@@ -81,6 +76,8 @@ static void key_app_start_capture(void)
 
 static void key_app_stop_capture(void)
 {
+    uart_send_pcm_stop();
+
     if (es8311_audio_set_run_mode(ES8311_AUDIO_RUN_MODE_PLAYBACK) != RT_EOK)
     {
         LOG_E("switch audio to playback failed");
@@ -90,12 +87,24 @@ static void key_app_stop_capture(void)
     LOG_I("PC9 released: playback mode restored");
 }
 
+static void key_app_toggle_capture(void)
+{
+    if (es8311_audio_get_run_mode() == ES8311_AUDIO_RUN_MODE_CAPTURE)
+    {
+        key_app_stop_capture();
+    }
+    else
+    {
+        key_app_start_capture();
+    }
+}
+
 static void key_app_handle_events(void)
 {
     rt_uint32_t events;
 
     if (rt_event_recv(&key_app_event,
-                      KEY_APP_EVT_START_CAPTURE | KEY_APP_EVT_STOP_CAPTURE,
+                      KEY_APP_EVT_TOGGLE_CAPTURE,
                       RT_EVENT_FLAG_OR | RT_EVENT_FLAG_CLEAR,
                       0,
                       &events) != RT_EOK)
@@ -103,13 +112,9 @@ static void key_app_handle_events(void)
         return;
     }
 
-    if ((events & KEY_APP_EVT_START_CAPTURE) != 0u)
+    if ((events & KEY_APP_EVT_TOGGLE_CAPTURE) != 0u)
     {
-        key_app_start_capture();
-    }
-    if ((events & KEY_APP_EVT_STOP_CAPTURE) != 0u)
-    {
-        key_app_stop_capture();
+        key_app_toggle_capture();
     }
 }
 
@@ -191,6 +196,6 @@ rt_err_t key_app_init(void)
         return -RT_ERROR;
     }
 
-    LOG_I("key app init ok, pin=PC9, longpress=%ums", KB_LONGPRESS_MS);
+    LOG_I("key app init ok, pin=PC9, double_click=%ums", KB_DOUBLE_CLICK_MS);
     return RT_EOK;
 }
