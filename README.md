@@ -13,6 +13,8 @@
   - 解码为 PCM
   - 通过 `I2S2 + DMA + ES8311` 播放
 - 在本地按键触发后，切换到采集模式：
+  - 如果当前 A2DP media stream 仍在 active，先发起 `AVDTP suspend`
+  - 等流真正进入 inactive 后再切到采集
   - 从 `ES8311 + I2S2 Rx` 采集 PCM
   - 经 `uart3` 导出原始 PCM 数据
 
@@ -173,7 +175,9 @@ main()
     - signaling connection established / released
     - SBC configuration
     - stream established / started / suspended / stopped / released
+    - command accepted / rejected
   - 在 `STREAM_STARTED` 时确保本地播放链路已经 arm
+  - 对上层提供 media stream suspend 请求与状态查询
   - 收到媒体包后，把包转交给 `bt_a2dp_audio_process_media_packet()`
 
 ### 4.4 A2DP 解码层
@@ -248,6 +252,8 @@ main()
   - 当前业务动作是：
     - `PC9` 双击
     - 在播放模式和采集模式之间切换
+    - 从播放切到采集前，先请求挂起当前 A2DP media stream
+    - 只有等流真正 inactive 后，才切到 `CAPTURE`
 
 - `applications/uart_send_pcm.c`
   - 在采集模式下创建独立线程
@@ -351,10 +357,15 @@ RT-Thread startup
 ```text
 PC9 双击
   -> key_app_toggle_capture()
-  -> es8311_audio_set_run_mode(CAPTURE)
-  -> es8311_audio_start_capture()
-      -> HAL_I2SEx_TransmitReceive_DMA()
-      -> es8311_start_record()
+  -> key_app_start_capture()
+      -> 若当前 A2DP stream active:
+          -> bt_a2dp_sink_request_media_suspend()
+          -> 等待 A2DP stream inactive
+      -> key_app_start_capture_now()
+          -> es8311_audio_set_run_mode(CAPTURE)
+          -> es8311_audio_start_capture()
+              -> HAL_I2SEx_TransmitReceive_DMA()
+              -> es8311_start_record()
   -> DMA half/full callback
       -> 从 I2S Rx buffer 提取一个有效 slot
       -> 写入 capture ring buffer
@@ -468,6 +479,7 @@ ES8311 当前默认配置特征：
 - 可建立 A2DP 连接并协商 SBC 参数
 - 可接收 SBC 媒体包并解码为 PCM
 - 可通过 `I2S2 + DMA + ES8311` 播放音频
+- 按键切换到采集前，会先挂起当前 A2DP media stream，避免继续收包后在本地丢弃
 - 可通过本地按键切换到采集模式
 - 可把采集 PCM 经 `uart3` 导出
 
@@ -478,6 +490,7 @@ ES8311 当前默认配置特征：
 - 只实现了 A2DP Sink 主链路
 - BLE 业务当前关闭，虽然底层封装预留了接口
 - 没有接 AVRCP 控制层
+- 当前按键切采集依赖 `AVDTP suspend`，不是 AVRCP 的播放/暂停控制
 - 没有接 HFP / HSP
 - `bt_a2dp_audio.c` 尚未实现 SBC fragmentation 重组
 - 播放与采集当前是互斥关系，不能并行

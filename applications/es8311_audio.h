@@ -66,7 +66,7 @@ rt_bool_t es8311_audio_is_playback_running(void);
 rt_err_t es8311_audio_start_capture(void);
 void es8311_audio_stop_capture(void);
 void es8311_audio_flush_capture(void);
-/* 读取的是 I2S RX 左声道 slot 抽取后的 mono PCM。 */
+/* 读取的是 I2S RX 两个 slot 中自动挑选出的 mono PCM。 */
 rt_uint32_t es8311_audio_read_capture(rt_int16_t * pcm, rt_uint32_t max_frames);
 rt_uint32_t es8311_audio_get_capture_level_frames(void);
 rt_uint32_t es8311_audio_get_capture_drop_frames(void);

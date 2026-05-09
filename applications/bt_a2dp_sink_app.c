@@ -13,6 +13,8 @@
 #include "hci.h"
 #include "hci_cmd.h"
 #include "classic/a2dp_sink.h"
+#include "classic/avdtp.h"
+#include "classic/avdtp_sink.h"
 #include "classic/avdtp_util.h"
 #include "classic/sdp_server.h"
 
@@ -58,9 +60,11 @@ static const avdtp_configuration_sbc_t bt_app_a2dp_sbc_preferred_configuration =
 static uint16_t bt_app_a2dp_cid = 0u;
 static uint8_t bt_app_a2dp_local_seid = 0u;
 static rt_uint32_t bt_app_a2dp_sample_rate = ES8311_AUDIO_DEFAULT_SAMPLE_RATE;
+static rt_bool_t bt_app_a2dp_stream_active = RT_FALSE;
 static rt_bool_t bt_app_a2dp_media_allowed = RT_FALSE;
 static rt_bool_t bt_app_a2dp_media_drop_logged = RT_FALSE;
 static rt_bool_t bt_app_a2dp_playback_error_logged = RT_FALSE;
+static rt_bool_t bt_app_a2dp_suspend_in_progress = RT_FALSE;
 
 static rt_bool_t bt_app_a2dp_ensure_playback_started(const char * reason)
 {
@@ -201,6 +205,7 @@ static void bt_app_handle_a2dp_meta_event(uint8_t * packet)
 
         bt_app_a2dp_cid = a2dp_subevent_stream_established_get_a2dp_cid(packet);
         bt_app_a2dp_local_seid = a2dp_subevent_stream_established_get_local_seid(packet);
+        bt_app_a2dp_stream_active = RT_FALSE;
         bt_app_a2dp_media_allowed = RT_FALSE;
         bt_app_a2dp_media_drop_logged = RT_FALSE;
         bt_app_a2dp_playback_error_logged = RT_FALSE;
@@ -213,6 +218,8 @@ static void bt_app_handle_a2dp_meta_event(uint8_t * packet)
     }
 
     case A2DP_SUBEVENT_STREAM_STARTED:
+        bt_app_a2dp_suspend_in_progress = RT_FALSE;
+        bt_app_a2dp_stream_active = RT_TRUE;
         if (bt_app_a2dp_ensure_playback_started("stream_started"))
         {
             bt_app_a2dp_media_allowed = RT_TRUE;
@@ -231,6 +238,8 @@ static void bt_app_handle_a2dp_meta_event(uint8_t * packet)
         break;
 
     case A2DP_SUBEVENT_STREAM_SUSPENDED:
+        bt_app_a2dp_suspend_in_progress = RT_FALSE;
+        bt_app_a2dp_stream_active = RT_FALSE;
         bt_app_a2dp_media_allowed = RT_FALSE;
         bt_app_a2dp_media_drop_logged = RT_FALSE;
         bt_app_a2dp_stop_playback();
@@ -240,6 +249,8 @@ static void bt_app_handle_a2dp_meta_event(uint8_t * packet)
         break;
 
     case A2DP_SUBEVENT_STREAM_STOPPED:
+        bt_app_a2dp_suspend_in_progress = RT_FALSE;
+        bt_app_a2dp_stream_active = RT_FALSE;
         bt_app_a2dp_media_allowed = RT_FALSE;
         bt_app_a2dp_media_drop_logged = RT_FALSE;
         bt_app_a2dp_stop_playback();
@@ -249,6 +260,8 @@ static void bt_app_handle_a2dp_meta_event(uint8_t * packet)
         break;
 
     case A2DP_SUBEVENT_STREAM_RELEASED:
+        bt_app_a2dp_suspend_in_progress = RT_FALSE;
+        bt_app_a2dp_stream_active = RT_FALSE;
         bt_app_a2dp_media_allowed = RT_FALSE;
         bt_app_a2dp_media_drop_logged = RT_FALSE;
         bt_app_a2dp_stop_playback();
@@ -261,6 +274,8 @@ static void bt_app_handle_a2dp_meta_event(uint8_t * packet)
         break;
 
     case A2DP_SUBEVENT_SIGNALING_CONNECTION_RELEASED:
+        bt_app_a2dp_suspend_in_progress = RT_FALSE;
+        bt_app_a2dp_stream_active = RT_FALSE;
         bt_app_a2dp_media_allowed = RT_FALSE;
         bt_app_a2dp_media_drop_logged = RT_FALSE;
         bt_app_a2dp_stop_playback();
@@ -270,6 +285,39 @@ static void bt_app_handle_a2dp_meta_event(uint8_t * packet)
               a2dp_subevent_signaling_connection_released_get_a2dp_cid(packet));
         bt_app_a2dp_cid = 0u;
         bt_app_a2dp_local_seid = 0u;
+        break;
+
+    case A2DP_SUBEVENT_COMMAND_ACCEPTED:
+        if (a2dp_subevent_command_accepted_get_signal_identifier(packet) == AVDTP_SI_SUSPEND)
+        {
+            LOG_I("A2DP suspend command accepted, cid=0x%04x, local_seid=%u",
+                  a2dp_subevent_command_accepted_get_a2dp_cid(packet),
+                  a2dp_subevent_command_accepted_get_local_seid(packet));
+        }
+        else if (a2dp_subevent_command_accepted_get_signal_identifier(packet) == AVDTP_SI_START)
+        {
+            LOG_I("A2DP start command accepted, cid=0x%04x, local_seid=%u",
+                  a2dp_subevent_command_accepted_get_a2dp_cid(packet),
+                  a2dp_subevent_command_accepted_get_local_seid(packet));
+        }
+        break;
+
+    case A2DP_SUBEVENT_COMMAND_REJECTED:
+        if (a2dp_subevent_command_rejected_get_signal_identifier(packet) == AVDTP_SI_SUSPEND)
+        {
+            bt_app_a2dp_suspend_in_progress = RT_FALSE;
+            LOG_E("A2DP suspend command rejected, cid=0x%04x, local_seid=%u, is_initiator=%u",
+                  a2dp_subevent_command_rejected_get_a2dp_cid(packet),
+                  a2dp_subevent_command_rejected_get_local_seid(packet),
+                  a2dp_subevent_command_rejected_get_is_initiator(packet));
+        }
+        else if (a2dp_subevent_command_rejected_get_signal_identifier(packet) == AVDTP_SI_START)
+        {
+            LOG_E("A2DP start command rejected, cid=0x%04x, local_seid=%u, is_initiator=%u",
+                  a2dp_subevent_command_rejected_get_a2dp_cid(packet),
+                  a2dp_subevent_command_rejected_get_local_seid(packet),
+                  a2dp_subevent_command_rejected_get_is_initiator(packet));
+        }
         break;
 
     default:
@@ -376,5 +424,98 @@ rt_err_t bt_a2dp_sink_service_init(void)
           avdtp_stream_endpoint_seid(bt_app_a2dp_sink_sep));
     return RT_EOK;
 #endif
+}
+
+bt_a2dp_sink_suspend_result_t bt_a2dp_sink_request_media_suspend(void)
+{
+    uint8_t status;
+
+    if ((bt_app_a2dp_cid == 0u) || (bt_app_a2dp_local_seid == 0u) || !bt_app_a2dp_stream_active)
+    {
+        return BT_A2DP_SINK_SUSPEND_NOT_NEEDED;
+    }
+
+    if (bt_app_a2dp_suspend_in_progress)
+    {
+        return BT_A2DP_SINK_SUSPEND_PENDING;
+    }
+
+    status = avdtp_sink_suspend(bt_app_a2dp_cid, bt_app_a2dp_local_seid);
+    if (status != ERROR_CODE_SUCCESS)
+    {
+        LOG_E("avdtp_sink_suspend failed, status=0x%02x, cid=0x%04x, local_seid=%u",
+              status,
+              bt_app_a2dp_cid,
+              bt_app_a2dp_local_seid);
+        return BT_A2DP_SINK_SUSPEND_FAILED;
+    }
+
+    bt_app_a2dp_suspend_in_progress = RT_TRUE;
+    LOG_I("A2DP suspend requested, cid=0x%04x, local_seid=%u",
+          bt_app_a2dp_cid,
+          bt_app_a2dp_local_seid);
+    return BT_A2DP_SINK_SUSPEND_PENDING;
+}
+
+rt_err_t bt_a2dp_sink_resume_media_stream(void)
+{
+    uint8_t status;
+
+    // 退出 capture 后，先按 A2DP 当前协商参数把本地播放链路恢复好，
+    // 再主动发 START，让远端 source 立即恢复媒体流。
+    if (es8311_audio_get_run_mode() == ES8311_AUDIO_RUN_MODE_CAPTURE)
+    {
+        es8311_audio_stop_capture();
+        es8311_audio_flush_capture();
+    }
+
+    if (es8311_audio_configure(bt_app_a2dp_sample_rate, 2u) != RT_EOK)
+    {
+        LOG_E("restore A2DP playback config failed, sample_rate=%u", bt_app_a2dp_sample_rate);
+        return -RT_ERROR;
+    }
+
+    if (es8311_audio_set_run_mode(ES8311_AUDIO_RUN_MODE_PLAYBACK) != RT_EOK)
+    {
+        LOG_E("restore local playback mode failed");
+        return -RT_ERROR;
+    }
+
+    if ((bt_app_a2dp_cid == 0u) || (bt_app_a2dp_local_seid == 0u))
+    {
+        LOG_I("local playback restored, no suspended A2DP stream to start");
+        return RT_EOK;
+    }
+
+    if (bt_app_a2dp_stream_active)
+    {
+        LOG_I("local playback restored, A2DP stream is already active");
+        return RT_EOK;
+    }
+
+    status = avdtp_sink_start_stream(bt_app_a2dp_cid, bt_app_a2dp_local_seid);
+    if (status != ERROR_CODE_SUCCESS)
+    {
+        LOG_E("avdtp_sink_start_stream failed, status=0x%02x, cid=0x%04x, local_seid=%u",
+              status,
+              bt_app_a2dp_cid,
+              bt_app_a2dp_local_seid);
+        return -RT_ERROR;
+    }
+
+    LOG_I("A2DP start requested, cid=0x%04x, local_seid=%u",
+          bt_app_a2dp_cid,
+          bt_app_a2dp_local_seid);
+    return RT_EOK;
+}
+
+rt_bool_t bt_a2dp_sink_is_stream_active(void)
+{
+    return bt_app_a2dp_stream_active;
+}
+
+rt_bool_t bt_a2dp_sink_is_suspend_in_progress(void)
+{
+    return bt_app_a2dp_suspend_in_progress;
 }
 

@@ -39,9 +39,16 @@ typedef enum
 {
     ES8311_AUDIO_DMA_MODE_STOPPED = 0,
     ES8311_AUDIO_DMA_MODE_PLAYBACK,
+    // Capture 走 I2S full-duplex，因此录音时仍然要维持 TX 侧持续送时钟。
     ES8311_AUDIO_DMA_MODE_DUPLEX,
 } es8311_audio_dma_mode_t;
 
+// 统一音频会话上下文。
+// 这个文件不把播放/采集拆成两个独立状态机，而是集中在一个上下文里维护：
+// - 当前 I2S/DMA 工作模式
+// - playback/capture ring buffer
+// - codec 当前 sample rate
+// - 采集 slot 自动选择结果
 typedef struct
 {
     DMA_HandleTypeDef hdma_i2s2_rx;
@@ -227,6 +234,8 @@ static void es8311_audio_drop_oldest_playback_frames_locked(rt_uint32_t frames)
 
 static rt_err_t es8311_audio_apply_codec_state(void)
 {
+    // I2S 重配后，codec 的采样率和收发状态也要一起同步，
+    // 否则会出现 I2S 已经切到新配置，而 codec 仍停留在旧状态的问题。
     if (es8311_set_sample_rate(es8311_audio_ctx.sample_rate) != RT_EOK)
     {
         LOG_E("es8311_set_sample_rate failed: %u", es8311_audio_ctx.sample_rate);
@@ -339,6 +348,7 @@ static rt_err_t es8311_audio_start_playback_dma(void)
     }
 
     es8311_audio_clear_dma_buffers();
+    // DMA 启动前先把两个 half 都预填好，避免一上来就发未初始化数据。
     es8311_audio_fill_tx_range(0u, ES8311_AUDIO_DMA_HALF_FRAMES);
     es8311_audio_fill_tx_range(ES8311_AUDIO_DMA_HALF_FRAMES, ES8311_AUDIO_DMA_HALF_FRAMES);
     if (HAL_I2S_Transmit_DMA(&hi2s2,
@@ -368,6 +378,7 @@ static rt_err_t es8311_audio_start_duplex_dma(void)
     }
 
     es8311_audio_clear_dma_buffers();
+    // 采集走全双工 DMA：TX 侧持续送静音/播放数据，RX 侧同步把 slot 采回来。
     if (HAL_I2SEx_TransmitReceive_DMA(&hi2s2,
                                       es8311_audio_dma_tx_buffer,
                                       es8311_audio_dma_rx_buffer,
@@ -421,6 +432,8 @@ static rt_err_t es8311_audio_i2s_reconfigure(rt_uint32_t sample_rate)
     was_dma_mode = es8311_audio_ctx.dma_mode;
     old_sample_rate = es8311_audio_ctx.sample_rate;
 
+    // 所有采样率切换都统一走这里：
+    // 先停 DMA，再重建 I2S，再把 codec 和运行态恢复回去。
     if (es8311_audio_ctx.dma_mode != ES8311_AUDIO_DMA_MODE_STOPPED)
     {
         es8311_audio_stop_dma();
@@ -554,6 +567,7 @@ static void es8311_audio_fill_tx_range(rt_size_t offset_frames, rt_size_t frames
         LOG_W("playback underflow, TX outputs silence");
     }
 
+    // ring 里的数据不够时，剩余部分补静音，保证 DMA 连续跑。
     for (sample_index = copied_samples; sample_index < total_samples; sample_index++)
     {
         es8311_audio_dma_tx_buffer[offset_frames * ES8311_AUDIO_PLAYBACK_OUTPUT_CHANNELS + sample_index] = 0u;
@@ -583,6 +597,8 @@ static void es8311_audio_write_capture_mono(const rt_uint16_t * source, rt_uint3
         es8311_audio_collect_slot_stats(source, frames, 1u, &right);
         left_saturated = es8311_audio_slot_stats_saturated(&left, frames);
         right_saturated = es8311_audio_slot_stats_saturated(&right, frames);
+        // 当前采集最终导出的是 mono。
+        // 这里先看左右 slot 的统计特征，选一条更像“有效音频”的路。
         es8311_audio_ctx.capture_slot = es8311_audio_pick_capture_slot(&left, &right, frames);
 
         if (!es8311_audio_ctx.capture_diag_printed)
@@ -655,6 +671,9 @@ static void es8311_audio_write_capture_mono(const rt_uint16_t * source, rt_uint3
 
 static void es8311_audio_process_dma_half(rt_size_t offset_frames)
 {
+    // 同一个 DMA half 完成两件事：
+    // 1. 给 TX half 补下一段播放数据
+    // 2. 从 RX half 抽取一段采集数据
     es8311_audio_fill_tx_range(offset_frames, ES8311_AUDIO_DMA_HALF_FRAMES);
     es8311_audio_write_capture_mono(&es8311_audio_dma_rx_buffer[offset_frames * ES8311_AUDIO_PLAYBACK_OUTPUT_CHANNELS],
                                     ES8311_AUDIO_DMA_HALF_FRAMES);
@@ -825,6 +844,7 @@ rt_err_t es8311_audio_set_run_mode(es8311_audio_run_mode_t mode)
             return RT_EOK;
         }
 
+        // 当前实现里 playback/capture 是互斥的，切模式时直接清空对侧缓存。
         es8311_audio_stop_capture();
         es8311_audio_flush_capture();
         err = es8311_audio_start_playback();
@@ -842,6 +862,7 @@ rt_err_t es8311_audio_set_run_mode(es8311_audio_run_mode_t mode)
 
         es8311_audio_stop_playback();
         es8311_audio_flush_playback();
+        // capture 目前固定回到默认采样率，先保证链路简单稳定。
         if (es8311_audio_i2s_reconfigure(ES8311_AUDIO_DEFAULT_SAMPLE_RATE) != RT_EOK)
         {
             LOG_E("switch capture sample rate failed: %u", ES8311_AUDIO_DEFAULT_SAMPLE_RATE);
@@ -876,6 +897,8 @@ rt_err_t es8311_audio_start_playback(void)
 
     level = rt_hw_interrupt_disable();
     es8311_audio_ctx.playback_running = RT_TRUE;
+    // 播放不是一 start 就立刻起 DMA，而是先攒到阈值，
+    // 这样能减少刚起播时 ring 太浅导致的连续 underflow。
     es8311_audio_ctx.playback_start_pending = RT_TRUE;
     es8311_audio_ctx.playback_underflow_notice_printed = RT_FALSE;
     rt_hw_interrupt_enable(level);
@@ -998,6 +1021,7 @@ rt_uint32_t es8311_audio_write_playback_checked(const rt_int16_t * pcm,
     frames_to_write = frames;
     if (frames_to_write > ES8311_AUDIO_PLAYBACK_BUFFER_FRAMES)
     {
+        // 单次写入过大时，只保留尾部最新一段，避免陈旧 PCM 拉高延迟。
         start_frame = frames_to_write - ES8311_AUDIO_PLAYBACK_BUFFER_FRAMES;
         frames_to_write = ES8311_AUDIO_PLAYBACK_BUFFER_FRAMES;
         overflow_happened = RT_TRUE;
@@ -1013,6 +1037,7 @@ rt_uint32_t es8311_audio_write_playback_checked(const rt_int16_t * pcm,
                                      ES8311_AUDIO_PLAYBACK_OUTPUT_CHANNELS);
         if (free_frames < frames_to_write)
         {
+            // ring 满了优先丢最旧的数据，保持“尽量播放最新 PCM”的策略。
             es8311_audio_drop_oldest_playback_frames_locked(frames_to_write - free_frames);
             overflow_happened = RT_TRUE;
         }
@@ -1063,6 +1088,7 @@ rt_uint32_t es8311_audio_write_playback_checked(const rt_int16_t * pcm,
         (es8311_audio_ctx.playback_ring.level / ES8311_AUDIO_PLAYBACK_OUTPUT_CHANNELS >=
          ES8311_AUDIO_PLAYBACK_START_THRESHOLD_FRAMES))
     {
+        // 达到起播水位后，再真正拉起 DMA。
         es8311_audio_ctx.playback_start_pending = RT_FALSE;
         es8311_audio_ctx.playback_underflow_notice_printed = RT_FALSE;
         start_dma = RT_TRUE;

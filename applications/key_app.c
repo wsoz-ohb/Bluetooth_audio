@@ -7,6 +7,7 @@
 
 #include <rtdevice.h>
 
+#include "bt_a2dp_sink_app.h"
 #include "drv_common.h"
 #include "es8311_audio.h"
 #include "keyboard_driver.h"
@@ -29,6 +30,7 @@ static keyboard_control_t key_app_keyboard;
 static rt_thread_t key_app_thread;
 static struct rt_event key_app_event;
 static rt_bool_t key_app_event_inited = RT_FALSE;
+static rt_bool_t key_app_capture_wait_suspend = RT_FALSE;
 
 static uint8_t key_app_read_pin(uint8_t pin)
 {
@@ -56,7 +58,7 @@ static void key_app_event_cb(const char *keyname, uint16_t key_id, kb_event_t ev
     }
 }
 
-static void key_app_start_capture(void)
+static void key_app_start_capture_now(void)
 {
     if (es8311_audio_set_run_mode(ES8311_AUDIO_RUN_MODE_CAPTURE) != RT_EOK)
     {
@@ -71,20 +73,50 @@ static void key_app_start_capture(void)
         return;
     }
 
-    LOG_I("PC9 long press: capture PCM enabled");
+    LOG_I("PC9 double click: capture PCM enabled");
+}
+
+static void key_app_start_capture(void)
+{
+    bt_a2dp_sink_suspend_result_t suspend_result;
+
+    if (key_app_capture_wait_suspend)
+    {
+        LOG_W("capture request is already waiting for A2DP suspend");
+        return;
+    }
+
+    suspend_result = bt_a2dp_sink_request_media_suspend();
+    switch (suspend_result)
+    {
+    case BT_A2DP_SINK_SUSPEND_PENDING:
+        key_app_capture_wait_suspend = RT_TRUE;
+        LOG_I("capture request queued, wait A2DP stream suspend");
+        return;
+
+    case BT_A2DP_SINK_SUSPEND_FAILED:
+        LOG_E("request A2DP stream suspend failed");
+        return;
+
+    case BT_A2DP_SINK_SUSPEND_NOT_NEEDED:
+    default:
+        break;
+    }
+
+    key_app_start_capture_now();
 }
 
 static void key_app_stop_capture(void)
 {
     uart_send_pcm_stop();
 
-    if (es8311_audio_set_run_mode(ES8311_AUDIO_RUN_MODE_PLAYBACK) != RT_EOK)
+    if (bt_a2dp_sink_resume_media_stream() != RT_EOK)
     {
-        LOG_E("switch audio to playback failed");
+        LOG_E("restore playback and request A2DP start failed");
         return;
     }
 
-    LOG_I("PC9 released: playback mode restored");
+    LOG_I("PC9 double click: playback mode restored");
 }
 
 static void key_app_toggle_capture(void)
@@ -118,6 +150,27 @@ static void key_app_handle_events(void)
     }
 }
 
+static void key_app_poll_capture_wait_suspend(void)
+{
+    if (!key_app_capture_wait_suspend)
+    {
+        return;
+    }
+
+    if (!bt_a2dp_sink_is_stream_active())
+    {
+        key_app_capture_wait_suspend = RT_FALSE;
+        key_app_start_capture_now();
+        return;
+    }
+
+    if (!bt_a2dp_sink_is_suspend_in_progress())
+    {
+        key_app_capture_wait_suspend = RT_FALSE;
+        LOG_E("A2DP stream is still active after suspend request");
+    }
+}
+
 static void key_app_thread_entry(void *parameter)
 {
     RT_UNUSED(parameter);
@@ -126,6 +179,7 @@ static void key_app_thread_entry(void *parameter)
     {
         keyboard_poll(&key_app_keyboard, KEY_APP_POLL_MS);
         key_app_handle_events();
+        key_app_poll_capture_wait_suspend();
         rt_thread_mdelay(KEY_APP_POLL_MS);
     }
 }
