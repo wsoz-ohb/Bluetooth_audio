@@ -47,7 +47,8 @@
 #define BT_CFG_ENABLE_HFP_WBS                      0
 #define BT_CFG_ENABLE_L2CAP_ERTM                   0
 #define BT_CFG_ENABLE_SCO_OVER_HCI                 0
-
+#define BT_CFG_MAX_NR_AVRCP_CONNECTIONS            2
+#define BT_CFG_MAX_NR_AVRCP_BROWSING_CONNECTIONS   0
 // ---------------------------------------------------------------------------
 // 基础协议初始化开关
 // 这里只处理“协议层”初始化，不直接代替具体 profile 的业务注册
@@ -118,8 +119,8 @@
 #define BT_CFG_HCI_ACL_PAYLOAD_SIZE                (1691 + 4)
 
 #define BT_CFG_MAX_NR_HCI_CONNECTIONS              2
-#define BT_CFG_MAX_NR_L2CAP_CHANNELS               4
-#define BT_CFG_MAX_NR_L2CAP_SERVICES               3
+#define BT_CFG_MAX_NR_L2CAP_CHANNELS               6
+#define BT_CFG_MAX_NR_L2CAP_SERVICES               4
 
 #define BT_CFG_MAX_NR_RFCOMM_MULTIPLEXERS          1
 #define BT_CFG_MAX_NR_RFCOMM_SERVICES              1

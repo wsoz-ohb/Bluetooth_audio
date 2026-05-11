@@ -10,6 +10,7 @@
 #include "bt_app.h"
 #include "btstack_port.h"
 #include "bt_a2dp_sink_app.h"
+#include "bt_avrcp_ct_app.h"
 
 #define DBG_TAG "bt_app"
 #define DBG_LVL DBG_INFO
@@ -19,7 +20,16 @@ static int bt_profiles_init(void)
 {
     // 这里只负责注册蓝牙 profile。
     // 当前工程只保留 ES8311 音频链路，具体音频启停在 A2DP 事件里控制。
-    return bt_a2dp_sink_service_init();
+    if(bt_a2dp_sink_service_init() != RT_EOK)
+    {
+        return -RT_ERROR;
+    }
+    //AVRCP注册
+    if(bt_avrcp_ct_service_init() != RT_EOK)
+    {
+        return -RT_ERROR;
+    }
+    return RT_EOK;
 }
 
 rt_err_t bt__init(void)

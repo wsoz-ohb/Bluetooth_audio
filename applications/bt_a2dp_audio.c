@@ -11,6 +11,7 @@
 #include "btstack_util.h"
 #include "classic/avdtp.h"
 #include "classic/btstack_sbc.h"
+#include "bt_avrcp_ct_app.h"
 
 #define DBG_TAG "bt_a2dp_audio"
 #define DBG_LVL DBG_INFO

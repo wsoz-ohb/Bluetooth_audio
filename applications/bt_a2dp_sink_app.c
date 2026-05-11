@@ -17,6 +17,7 @@
 #include "classic/avdtp_sink.h"
 #include "classic/avdtp_util.h"
 #include "classic/sdp_server.h"
+#include "bt_avrcp_ct_app.h"
 
 #define DBG_TAG "bt_a2dp"
 #define DBG_LVL DBG_INFO
@@ -157,11 +158,16 @@ static void bt_app_handle_a2dp_meta_event(uint8_t * packet)
                   bd_addr_to_str(remote_addr));
             break;
         }
-
+        
         bt_app_a2dp_cid = a2dp_subevent_signaling_connection_established_get_a2dp_cid(packet);
         LOG_I("A2DP signaling connected, remote=%s, cid=0x%04x",
               bd_addr_to_str(remote_addr),
               bt_app_a2dp_cid);
+        if (bt_avrcp_ct_connect(remote_addr) != RT_EOK)
+        {
+            LOG_W("AVRCP CT connect request was not accepted, remote=%s",
+                  bd_addr_to_str(remote_addr));
+        }
         break;
     }
 
@@ -468,7 +474,7 @@ rt_err_t bt_a2dp_sink_resume_media_stream(void)
         es8311_audio_stop_capture();
         es8311_audio_flush_capture();
     }
-
+    
     if (es8311_audio_configure(bt_app_a2dp_sample_rate, 2u) != RT_EOK)
     {
         LOG_E("restore A2DP playback config failed, sample_rate=%u", bt_app_a2dp_sample_rate);

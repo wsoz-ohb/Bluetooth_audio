@@ -12,6 +12,7 @@
 #include "es8311_audio.h"
 #include "keyboard_driver.h"
 #include "uart_send_pcm.h"
+#include "bt_avrcp_ct_app.h"
 
 #define DBG_TAG "key_app"
 #define DBG_LVL DBG_WARNING
@@ -85,6 +86,10 @@ static void key_app_start_capture(void)
         LOG_W("capture request is already waiting for A2DP suspend");
         return;
     }
+    if (bt_avrcp_ct_pause() == RT_EOK)
+    {
+        rt_thread_mdelay(300);
+    }
 
     suspend_result = bt_a2dp_sink_request_media_suspend();
     switch (suspend_result)
@@ -115,6 +120,7 @@ static void key_app_stop_capture(void)
         LOG_E("restore playback and request A2DP start failed");
         return;
     }
+    bt_avrcp_ct_play();    //控制远端开始播放
 
     LOG_I("PC9 double click: playback mode restored");
 }
