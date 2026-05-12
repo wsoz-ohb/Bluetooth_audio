@@ -41,13 +41,63 @@ typedef uint8_t (*bt_avrcp_ct_command_sender_t)(uint16_t avrcp_cid);
 
 static uint8_t bt_app_avrcp_ct_sdp_record[BT_APP_AVRCP_CT_SDP_RECORD_SIZE];
 static uint16_t bt_avrcp_ct_cid = 0u;
-static rt_bool_t bt_avrcp_ct_connected = RT_FALSE;
+static bt_avrcp_ct_link_state_t bt_avrcp_ct_link_state = BT_AVRCP_CT_LINK_STATE_DISCONNECTED;
+static bt_avrcp_ct_playback_state_t bt_avrcp_ct_playback_state = BT_AVRCP_CT_PLAYBACK_STATE_UNKNOWN;
+static bt_avrcp_ct_op_state_t bt_avrcp_ct_op_state = BT_AVRCP_CT_OP_STATE_IDLE;
+static rt_bool_t bt_avrcp_ct_playback_status_notify_enabled = RT_FALSE;
 static btstack_context_callback_registration_t bt_avrcp_ct_command_registration;
 static bt_avrcp_ct_command_t bt_avrcp_ct_command_queue[BT_APP_AVRCP_CT_COMMAND_QUEUE_SIZE];
 static uint8_t bt_avrcp_ct_command_read_index = 0u;
 static uint8_t bt_avrcp_ct_command_write_index = 0u;
 static uint8_t bt_avrcp_ct_command_count = 0u;
 static rt_bool_t bt_avrcp_ct_command_callback_pending = RT_FALSE;
+
+const char * bt_avrcp_ct_link_state_name(bt_avrcp_ct_link_state_t state)
+{
+    switch (state)
+    {
+    case BT_AVRCP_CT_LINK_STATE_DISCONNECTED:
+        return "disconnected";
+    case BT_AVRCP_CT_LINK_STATE_CONNECTED:
+        return "connected";
+    default:
+        return "unknown";
+    }
+}
+
+const char * bt_avrcp_ct_playback_state_name(bt_avrcp_ct_playback_state_t state)
+{
+    switch (state)
+    {
+    case BT_AVRCP_CT_PLAYBACK_STATE_UNKNOWN:
+        return "unknown";
+    case BT_AVRCP_CT_PLAYBACK_STATE_STOPPED:
+        return "stopped";
+    case BT_AVRCP_CT_PLAYBACK_STATE_PLAYING:
+        return "playing";
+    case BT_AVRCP_CT_PLAYBACK_STATE_PAUSED:
+        return "paused";
+    default:
+        return "invalid";
+    }
+}
+
+const char * bt_avrcp_ct_op_state_name(bt_avrcp_ct_op_state_t state)
+{
+    switch (state)
+    {
+    case BT_AVRCP_CT_OP_STATE_IDLE:
+        return "idle";
+    case BT_AVRCP_CT_OP_STATE_WAIT_INITIAL_STATUS:
+        return "wait_initial_status";
+    case BT_AVRCP_CT_OP_STATE_WAIT_PLAY_ACK:
+        return "wait_play_ack";
+    case BT_AVRCP_CT_OP_STATE_WAIT_PAUSE_ACK:
+        return "wait_pause_ack";
+    default:
+        return "invalid";
+    }
+}
 
 static const char * bt_avrcp_ct_play_status_name(uint8_t play_status)
 {
@@ -68,6 +118,182 @@ static const char * bt_avrcp_ct_play_status_name(uint8_t play_status)
     default:
         return "unknown";
     }
+}
+
+static void bt_avrcp_ct_set_link_state(bt_avrcp_ct_link_state_t state)
+{
+    rt_base_t level;
+
+    level = rt_hw_interrupt_disable();
+    bt_avrcp_ct_link_state = state;
+    rt_hw_interrupt_enable(level);
+}
+
+static void bt_avrcp_ct_set_playback_state(bt_avrcp_ct_playback_state_t state)
+{
+    rt_base_t level;
+
+    level = rt_hw_interrupt_disable();
+    bt_avrcp_ct_playback_state = state;
+    rt_hw_interrupt_enable(level);
+}
+
+static void bt_avrcp_ct_set_op_state(bt_avrcp_ct_op_state_t state)
+{
+    rt_base_t level;
+
+    level = rt_hw_interrupt_disable();
+    bt_avrcp_ct_op_state = state;
+    rt_hw_interrupt_enable(level);
+}
+
+static void bt_avrcp_ct_set_playback_notify_enabled(rt_bool_t enabled)
+{
+    rt_base_t level;
+
+    level = rt_hw_interrupt_disable();
+    bt_avrcp_ct_playback_status_notify_enabled = enabled ? RT_TRUE : RT_FALSE;
+    rt_hw_interrupt_enable(level);
+}
+
+bt_avrcp_ct_link_state_t bt_avrcp_ct_get_link_state(void)
+{
+    rt_base_t level;
+    bt_avrcp_ct_link_state_t state;
+
+    level = rt_hw_interrupt_disable();
+    state = bt_avrcp_ct_link_state;
+    rt_hw_interrupt_enable(level);
+
+    return state;
+}
+
+bt_avrcp_ct_playback_state_t bt_avrcp_ct_get_playback_state(void)
+{
+    rt_base_t level;
+    bt_avrcp_ct_playback_state_t state;
+
+    level = rt_hw_interrupt_disable();
+    state = bt_avrcp_ct_playback_state;
+    rt_hw_interrupt_enable(level);
+
+    return state;
+}
+
+bt_avrcp_ct_op_state_t bt_avrcp_ct_get_op_state(void)
+{
+    rt_base_t level;
+    bt_avrcp_ct_op_state_t state;
+
+    level = rt_hw_interrupt_disable();
+    state = bt_avrcp_ct_op_state;
+    rt_hw_interrupt_enable(level);
+
+    return state;
+}
+
+rt_bool_t bt_avrcp_ct_is_connected(void)
+{
+    return (rt_bool_t) (bt_avrcp_ct_get_link_state() == BT_AVRCP_CT_LINK_STATE_CONNECTED);
+}
+
+static bt_avrcp_ct_playback_state_t bt_avrcp_ct_map_play_status(uint8_t play_status)
+{
+    switch (play_status)
+    {
+    case AVRCP_PLAYBACK_STATUS_STOPPED:
+        return BT_AVRCP_CT_PLAYBACK_STATE_STOPPED;
+    case AVRCP_PLAYBACK_STATUS_PLAYING:
+    case AVRCP_PLAYBACK_STATUS_FWD_SEEK:
+    case AVRCP_PLAYBACK_STATUS_REV_SEEK:
+        return BT_AVRCP_CT_PLAYBACK_STATE_PLAYING;
+    case AVRCP_PLAYBACK_STATUS_PAUSED:
+        return BT_AVRCP_CT_PLAYBACK_STATE_PAUSED;
+    case AVRCP_PLAYBACK_STATUS_ERROR:
+    default:
+        return BT_AVRCP_CT_PLAYBACK_STATE_UNKNOWN;
+    }
+}
+
+static void bt_avrcp_ct_reset_session_state(void)
+{
+    bt_avrcp_ct_set_link_state(BT_AVRCP_CT_LINK_STATE_DISCONNECTED);
+    bt_avrcp_ct_set_playback_state(BT_AVRCP_CT_PLAYBACK_STATE_UNKNOWN);
+    bt_avrcp_ct_set_op_state(BT_AVRCP_CT_OP_STATE_IDLE);
+    bt_avrcp_ct_set_playback_notify_enabled(RT_FALSE);
+}
+
+static void bt_avrcp_ct_update_playback_state(uint8_t play_status, const char * source)
+{
+    bt_avrcp_ct_playback_state_t old_state;
+    bt_avrcp_ct_playback_state_t new_state;
+    bt_avrcp_ct_op_state_t op_state;
+
+    old_state = bt_avrcp_ct_get_playback_state();
+    new_state = bt_avrcp_ct_map_play_status(play_status);
+    bt_avrcp_ct_set_playback_state(new_state);
+
+    if (old_state != new_state)
+    {
+        LOG_I("AVRCP cached playback state: %s -> %s, source=%s",
+              bt_avrcp_ct_playback_state_name(old_state),
+              bt_avrcp_ct_playback_state_name(new_state),
+              source);
+    }
+
+    op_state = bt_avrcp_ct_get_op_state();
+    if (new_state == BT_AVRCP_CT_PLAYBACK_STATE_UNKNOWN)
+    {
+        return;
+    }
+
+    if ((op_state == BT_AVRCP_CT_OP_STATE_WAIT_INITIAL_STATUS) ||
+        ((op_state == BT_AVRCP_CT_OP_STATE_WAIT_PLAY_ACK) &&
+         (new_state == BT_AVRCP_CT_PLAYBACK_STATE_PLAYING)) ||
+        ((op_state == BT_AVRCP_CT_OP_STATE_WAIT_PAUSE_ACK) &&
+         ((new_state == BT_AVRCP_CT_PLAYBACK_STATE_PAUSED) ||
+          (new_state == BT_AVRCP_CT_PLAYBACK_STATE_STOPPED))))
+    {
+        bt_avrcp_ct_set_op_state(BT_AVRCP_CT_OP_STATE_IDLE);
+    }
+}
+
+static void bt_avrcp_ct_sync_remote_playback_state(void)
+{
+    uint8_t status;
+
+    if (!bt_avrcp_ct_is_connected() || (bt_avrcp_ct_cid == 0u))
+    {
+        return;
+    }
+
+    bt_avrcp_ct_set_playback_notify_enabled(RT_FALSE);
+
+    status = avrcp_controller_enable_notification(bt_avrcp_ct_cid,
+                                                  AVRCP_NOTIFICATION_EVENT_PLAYBACK_STATUS_CHANGED);
+    if (status != ERROR_CODE_SUCCESS)
+    {
+        LOG_W("AVRCP playback status notification request failed, status=0x%02x, cid=0x%04x",
+              status,
+              bt_avrcp_ct_cid);
+    }
+    else
+    {
+        LOG_I("AVRCP playback status notification requested, cid=0x%04x", bt_avrcp_ct_cid);
+    }
+
+    status = avrcp_controller_get_play_status(bt_avrcp_ct_cid);
+    if (status != ERROR_CODE_SUCCESS)
+    {
+        bt_avrcp_ct_set_op_state(BT_AVRCP_CT_OP_STATE_IDLE);
+        LOG_W("AVRCP get_play_status request failed, status=0x%02x, cid=0x%04x",
+              status,
+              bt_avrcp_ct_cid);
+        return;
+    }
+
+    bt_avrcp_ct_set_op_state(BT_AVRCP_CT_OP_STATE_WAIT_INITIAL_STATUS);
+    LOG_I("AVRCP get_play_status requested, cid=0x%04x", bt_avrcp_ct_cid);
 }
 
 static const char * bt_avrcp_ct_operation_name(uint8_t operation_id)
@@ -200,7 +426,7 @@ static rt_err_t bt_avrcp_ct_send_command_now(bt_avrcp_ct_command_t command)
         return -RT_ERROR;
     }
 
-    if (!bt_avrcp_ct_connected || (bt_avrcp_ct_cid == 0u))
+    if (!bt_avrcp_ct_is_connected() || (bt_avrcp_ct_cid == 0u))
     {
         LOG_W("AVRCP CT %s ignored, not connected", name);
         return -RT_ERROR;
@@ -214,6 +440,15 @@ static rt_err_t bt_avrcp_ct_send_command_now(bt_avrcp_ct_command_t command)
               status,
               bt_avrcp_ct_cid);
         return -RT_ERROR;
+    }
+
+    if (command == BT_AVRCP_CT_COMMAND_PLAY)
+    {
+        bt_avrcp_ct_set_op_state(BT_AVRCP_CT_OP_STATE_WAIT_PLAY_ACK);
+    }
+    else if (command == BT_AVRCP_CT_COMMAND_PAUSE)
+    {
+        bt_avrcp_ct_set_op_state(BT_AVRCP_CT_OP_STATE_WAIT_PAUSE_ACK);
     }
 
     LOG_I("AVRCP CT %s requested, cid=0x%04x", name, bt_avrcp_ct_cid);
@@ -257,7 +492,7 @@ static rt_err_t bt_avrcp_ct_post_command(bt_avrcp_ct_command_t command)
     const char * name;
 
     name = bt_avrcp_ct_command_name(command);
-    if (!bt_avrcp_ct_connected || (bt_avrcp_ct_cid == 0u))
+    if (!bt_avrcp_ct_is_connected() || (bt_avrcp_ct_cid == 0u))
     {
         LOG_W("AVRCP CT %s ignored, not connected", name);
         return -RT_ERROR;
@@ -311,7 +546,7 @@ rt_err_t bt_avrcp_ct_connect(const bd_addr_t remote_addr)
         return -RT_ERROR;
     }
 
-    if (bt_avrcp_ct_connected)
+    if (bt_avrcp_ct_is_connected())
     {
         LOG_I("AVRCP CT already connected, cid=0x%04x", bt_avrcp_ct_cid);
         return RT_EOK;
@@ -365,11 +600,15 @@ void btstack_event_avrcp_controller_handler(uint8_t packet_type, uint16_t channe
         }
 
         bt_avrcp_ct_cid = avrcp_subevent_connection_established_get_avrcp_cid(packet);
-        bt_avrcp_ct_connected = RT_TRUE;
+        bt_avrcp_ct_set_link_state(BT_AVRCP_CT_LINK_STATE_CONNECTED);
+        bt_avrcp_ct_set_playback_state(BT_AVRCP_CT_PLAYBACK_STATE_UNKNOWN);
+        bt_avrcp_ct_set_op_state(BT_AVRCP_CT_OP_STATE_IDLE);
+        bt_avrcp_ct_set_playback_notify_enabled(RT_FALSE);
         LOG_I("AVRCP CT connected, remote=%s, cid=0x%04x, handle=0x%04x",
               bd_addr_to_str(remote_addr),
               bt_avrcp_ct_cid,
               avrcp_subevent_connection_established_get_con_handle(packet));
+        bt_avrcp_ct_sync_remote_playback_state();
         break;
     }
 
@@ -382,7 +621,7 @@ void btstack_event_avrcp_controller_handler(uint8_t packet_type, uint16_t channe
         if (bt_avrcp_ct_cid == cid)
         {
             bt_avrcp_ct_cid = 0u;
-            bt_avrcp_ct_connected = RT_FALSE;
+            bt_avrcp_ct_reset_session_state();
         }
         break;
     }
@@ -442,16 +681,30 @@ void btstack_event_avrcp_controller_handler(uint8_t packet_type, uint16_t channe
               (unsigned int)avrcp_subevent_play_status_get_song_position(packet),
               bt_avrcp_ct_play_status_name(play_status),
               play_status);
+        bt_avrcp_ct_update_playback_state(play_status, "play_status");
         break;
     }
 
     case AVRCP_SUBEVENT_NOTIFICATION_STATE:
+    {
+        uint8_t event_id;
+        uint8_t enabled;
+        uint8_t status;
+
+        event_id = avrcp_subevent_notification_state_get_event_id(packet);
+        enabled = avrcp_subevent_notification_state_get_enabled(packet);
+        status = avrcp_subevent_notification_state_get_status(packet);
         LOG_I("AVRCP notification state, cid=0x%04x, event_id=0x%02x, enabled=%u, status=0x%02x",
               avrcp_subevent_notification_state_get_avrcp_cid(packet),
-              avrcp_subevent_notification_state_get_event_id(packet),
-              avrcp_subevent_notification_state_get_enabled(packet),
-              avrcp_subevent_notification_state_get_status(packet));
+              event_id,
+              enabled,
+              status);
+        if (event_id == AVRCP_NOTIFICATION_EVENT_PLAYBACK_STATUS_CHANGED)
+        {
+            bt_avrcp_ct_set_playback_notify_enabled((rt_bool_t) ((status == ERROR_CODE_SUCCESS) && (enabled != 0u)));
+        }
         break;
+    }
 
     case AVRCP_SUBEVENT_NOTIFICATION_PLAYBACK_STATUS_CHANGED:
     {
@@ -463,6 +716,7 @@ void btstack_event_avrcp_controller_handler(uint8_t packet_type, uint16_t channe
               avrcp_subevent_notification_playback_status_changed_get_command_type(packet),
               bt_avrcp_ct_play_status_name(play_status),
               play_status);
+        bt_avrcp_ct_update_playback_state(play_status, "notification");
         break;
     }
 
@@ -685,6 +939,9 @@ void btstack_event_avrcp_controller_handler(uint8_t packet_type, uint16_t channe
 
 rt_err_t bt_avrcp_ct_service_init(void)
 {
+    bt_avrcp_ct_cid = 0u;
+    bt_avrcp_ct_reset_session_state();
+
     //初始化AVRCP协议栈
     avrcp_init();
     avrcp_target_init();

@@ -62,6 +62,7 @@ static uint16_t bt_app_a2dp_cid = 0u;
 static uint8_t bt_app_a2dp_local_seid = 0u;
 static rt_uint32_t bt_app_a2dp_sample_rate = ES8311_AUDIO_DEFAULT_SAMPLE_RATE;
 static rt_bool_t bt_app_a2dp_stream_active = RT_FALSE;
+static rt_bool_t bt_app_a2dp_local_media_enabled = RT_TRUE;
 static rt_bool_t bt_app_a2dp_media_allowed = RT_FALSE;
 static rt_bool_t bt_app_a2dp_media_drop_logged = RT_FALSE;
 static rt_bool_t bt_app_a2dp_playback_error_logged = RT_FALSE;
@@ -120,6 +121,16 @@ static void bt_app_a2dp_sink_media_handler(uint8_t local_seid, uint8_t * packet,
             LOG_W("A2DP media packet ignored, local_seid mismatch: got=%u, expected=%u",
                   local_seid,
                   bt_app_a2dp_local_seid);
+        }
+        return;
+    }
+
+    if (!bt_app_a2dp_local_media_enabled)
+    {
+        if (!bt_app_a2dp_media_drop_logged)
+        {
+            bt_app_a2dp_media_drop_logged = RT_TRUE;
+            LOG_W("A2DP media packet ignored, local playback gate is closed");
         }
         return;
     }
@@ -226,7 +237,15 @@ static void bt_app_handle_a2dp_meta_event(uint8_t * packet)
     case A2DP_SUBEVENT_STREAM_STARTED:
         bt_app_a2dp_suspend_in_progress = RT_FALSE;
         bt_app_a2dp_stream_active = RT_TRUE;
-        if (bt_app_a2dp_ensure_playback_started("stream_started"))
+        if (!bt_app_a2dp_local_media_enabled)
+        {
+            bt_app_a2dp_media_allowed = RT_FALSE;
+            bt_app_a2dp_media_drop_logged = RT_FALSE;
+            LOG_I("A2DP stream started while local playback gate is closed, cid=0x%04x, local_seid=%u",
+                  a2dp_subevent_stream_started_get_a2dp_cid(packet),
+                  a2dp_subevent_stream_started_get_local_seid(packet));
+        }
+        else if (bt_app_a2dp_ensure_playback_started("stream_started"))
         {
             bt_app_a2dp_media_allowed = RT_TRUE;
             bt_app_a2dp_media_drop_logged = RT_FALSE;
@@ -463,18 +482,41 @@ bt_a2dp_sink_suspend_result_t bt_a2dp_sink_request_media_suspend(void)
     return BT_A2DP_SINK_SUSPEND_PENDING;
 }
 
-rt_err_t bt_a2dp_sink_resume_media_stream(void)
+rt_err_t bt_a2dp_sink_set_local_media_enabled(rt_bool_t enabled)
 {
-    uint8_t status;
+    bt_app_a2dp_local_media_enabled = enabled ? RT_TRUE : RT_FALSE;
+    bt_app_a2dp_media_drop_logged = RT_FALSE;
 
-    // 退出 capture 后，先按 A2DP 当前协商参数把本地播放链路恢复好，
-    // 再主动发 START，让远端 source 立即恢复媒体流。
+    if (!bt_app_a2dp_local_media_enabled)
+    {
+        bt_app_a2dp_media_allowed = RT_FALSE;
+        return RT_EOK;
+    }
+
+    if (!bt_app_a2dp_stream_active)
+    {
+        bt_app_a2dp_media_allowed = RT_FALSE;
+        return RT_EOK;
+    }
+
+    if (!bt_app_a2dp_ensure_playback_started("local_media_enabled"))
+    {
+        bt_app_a2dp_media_allowed = RT_FALSE;
+        return -RT_ERROR;
+    }
+
+    bt_app_a2dp_media_allowed = RT_TRUE;
+    return RT_EOK;
+}
+
+rt_err_t bt_a2dp_sink_restore_local_playback(void)
+{
     if (es8311_audio_get_run_mode() == ES8311_AUDIO_RUN_MODE_CAPTURE)
     {
         es8311_audio_stop_capture();
         es8311_audio_flush_capture();
     }
-    
+
     if (es8311_audio_configure(bt_app_a2dp_sample_rate, 2u) != RT_EOK)
     {
         LOG_E("restore A2DP playback config failed, sample_rate=%u", bt_app_a2dp_sample_rate);
@@ -484,6 +526,20 @@ rt_err_t bt_a2dp_sink_resume_media_stream(void)
     if (es8311_audio_set_run_mode(ES8311_AUDIO_RUN_MODE_PLAYBACK) != RT_EOK)
     {
         LOG_E("restore local playback mode failed");
+        return -RT_ERROR;
+    }
+
+    return RT_EOK;
+}
+
+rt_err_t bt_a2dp_sink_resume_media_stream(void)
+{
+    uint8_t status;
+
+    // 退出 capture 后，先按 A2DP 当前协商参数把本地播放链路恢复好，
+    // 再主动发 START，让远端 source 立即恢复媒体流。
+    if (bt_a2dp_sink_restore_local_playback() != RT_EOK)
+    {
         return -RT_ERROR;
     }
 
