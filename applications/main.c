@@ -15,6 +15,7 @@
 #include "bt_app.h"
 #include "es8311_audio.h"
 #include "key_app.h"
+#include "mylvgl_app.h"
 
 int main(void)
 {
@@ -22,6 +23,7 @@ int main(void)
     {
         LOG_E("es8311_audio_init failed");
     }
+    boot_prompt_play_once();
 
     if (bt__init() != RT_EOK)
     {
@@ -33,8 +35,10 @@ int main(void)
            LOG_E("key_app_init failed");
     }
 
+    lv_user_gui_init();
     while (1)
     {
+        lv_user_gui_init();
         rt_thread_mdelay(10);
     }
 

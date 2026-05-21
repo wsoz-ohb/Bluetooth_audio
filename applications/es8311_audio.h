@@ -73,6 +73,8 @@ rt_uint32_t es8311_audio_get_capture_drop_frames(void);
 rt_bool_t es8311_audio_get_capture_format(es8311_audio_capture_format_t * format);
 rt_bool_t es8311_audio_is_capture_running(void);
 
+rt_err_t boot_prompt_play_once(void);
+
 #if defined(__cplusplus)
 }
 #endif

@@ -91,10 +91,75 @@
                   <listOptionValue builtIn="false" value="&quot;${workspace_loc:/Bluetooth_audio/mycomponents/wm9878}&quot;" />
                   <listOptionValue builtIn="false" value="&quot;${workspace_loc:/Bluetooth_audio/mycomponents/MAX98375}&quot;" />
                   <listOptionValue builtIn="false" value="&quot;${workspace_loc:/Bluetooth_audio/mycomponents/es8311}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc:/Bluetooth_audio/mycomponents/LVGL}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc:/Bluetooth_audio/mycomponents/LVGL/src}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc:/Bluetooth_audio/mycomponents/LCD}&quot;" />
                   <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//.}&quot;" />
                   <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//cubemx/Inc}&quot;" />
                   <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//cubemx}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/env_support/rt-thread}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/core}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/draw/arm2d}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/draw/nxp/pxp}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/draw/nxp/vglite}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/draw/renesas}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/draw/sdl}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/draw/stm32_dma2d}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/draw/swm341_dma2d}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/draw/sw}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/draw}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/layouts/flex}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/layouts/grid}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/layouts}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/libs/bmp}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/libs/ffmpeg}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/libs/freetype}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/libs/fsdrv}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/libs/gif}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/libs/png}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/libs/qrcode}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/libs/rlottie}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/libs/sjpg}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/libs/tiny_ttf}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/libs}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/others/fragment}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/others/gridnav}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/others/ime}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/others/imgfont}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/others/monkey}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/others/msg}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/others/snapshot}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/others}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/themes/basic}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/themes/default}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/themes/mono}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/themes}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/widgets/animimg}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/widgets/calendar}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/widgets/chart}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/widgets/colorwheel}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/widgets/imgbtn}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/widgets/keyboard}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/widgets/led}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/widgets/list}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/widgets/menu}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/widgets/meter}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/widgets/msgbox}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/widgets/span}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/widgets/spinbox}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/widgets/spinner}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/widgets/tabview}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/widgets/tileview}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/widgets/win}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/widgets}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/font}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/hal}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/misc}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/widgets}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src}&quot;" />
                   <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//rt-thread/components/drivers/include}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//rt-thread/components/drivers/spi}&quot;" />
                   <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//rt-thread/components/finsh}&quot;" />
                   <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//rt-thread/components/libc/compilers/common/include}&quot;" />
                   <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//rt-thread/components/libc/compilers/newlib}&quot;" />
@@ -198,7 +263,69 @@
                   <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//.}&quot;" />
                   <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//cubemx/Inc}&quot;" />
                   <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//cubemx}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/env_support/rt-thread}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/core}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/draw/arm2d}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/draw/nxp/pxp}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/draw/nxp/vglite}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/draw/renesas}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/draw/sdl}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/draw/stm32_dma2d}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/draw/swm341_dma2d}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/draw/sw}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/draw}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/layouts/flex}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/layouts/grid}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/layouts}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/libs/bmp}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/libs/ffmpeg}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/libs/freetype}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/libs/fsdrv}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/libs/gif}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/libs/png}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/libs/qrcode}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/libs/rlottie}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/libs/sjpg}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/libs/tiny_ttf}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/libs}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/others/fragment}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/others/gridnav}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/others/ime}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/others/imgfont}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/others/monkey}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/others/msg}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/others/snapshot}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/others}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/themes/basic}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/themes/default}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/themes/mono}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/themes}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/widgets/animimg}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/widgets/calendar}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/widgets/chart}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/widgets/colorwheel}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/widgets/imgbtn}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/widgets/keyboard}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/widgets/led}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/widgets/list}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/widgets/menu}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/widgets/meter}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/widgets/msgbox}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/widgets/span}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/widgets/spinbox}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/widgets/spinner}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/widgets/tabview}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/widgets/tileview}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/widgets/win}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra/widgets}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/extra}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/font}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/hal}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/misc}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src/widgets}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/lvgl-8.3.11/src}&quot;" />
                   <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//rt-thread/components/drivers/include}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//rt-thread/components/drivers/spi}&quot;" />
                   <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//rt-thread/components/finsh}&quot;" />
                   <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//rt-thread/components/libc/compilers/common/include}&quot;" />
                   <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//rt-thread/components/libc/compilers/newlib}&quot;" />
@@ -217,7 +344,7 @@
             </toolChain>
           </folderInfo>
           <sourceEntries>
-            <entry excluding="//cubemx/Drivers|//cubemx/EWARM|//cubemx/Src/stm32f4xx_it.c|//cubemx/Src/system_stm32f4xx.c|//rt-thread/components/dfs|//rt-thread/components/drivers/audio|//rt-thread/components/drivers/can|//rt-thread/components/drivers/cputime|//rt-thread/components/drivers/hwcrypto|//rt-thread/components/drivers/hwtimer|//rt-thread/components/drivers/misc/adc.c|//rt-thread/components/drivers/misc/dac.c|//rt-thread/components/drivers/misc/pulse_encoder.c|//rt-thread/components/drivers/misc/rt_drv_pwm.c|//rt-thread/components/drivers/misc/rt_inputcapture.c|//rt-thread/components/drivers/mtd|//rt-thread/components/drivers/phy|//rt-thread/components/drivers/pm|//rt-thread/components/drivers/rtc|//rt-thread/components/drivers/sdio|//rt-thread/components/drivers/sensors|//rt-thread/components/drivers/serial/serial_v2.c|//rt-thread/components/drivers/spi|//rt-thread/components/drivers/touch|//rt-thread/components/drivers/usb|//rt-thread/components/drivers/watchdog|//rt-thread/components/drivers/wlan|//rt-thread/components/fal|//rt-thread/components/finsh/msh_file.c|//rt-thread/components/legacy|//rt-thread/components/libc/compilers/armlibc|//rt-thread/components/libc/compilers/dlib|//rt-thread/components/libc/cplusplus|//rt-thread/components/libc/posix|//rt-thread/components/lwp|//rt-thread/components/net|//rt-thread/components/utilities|//rt-thread/components/vbus|//rt-thread/components/vmm|//rt-thread/libcpu/aarch64|//rt-thread/libcpu/arc|//rt-thread/libcpu/arm/AT91SAM7S|//rt-thread/libcpu/arm/AT91SAM7X|//rt-thread/libcpu/arm/am335x|//rt-thread/libcpu/arm/arm926|//rt-thread/libcpu/arm/armv6|//rt-thread/libcpu/arm/common/divsi3.S|//rt-thread/libcpu/arm/cortex-a|//rt-thread/libcpu/arm/cortex-m0|//rt-thread/libcpu/arm/cortex-m23|//rt-thread/libcpu/arm/cortex-m3|//rt-thread/libcpu/arm/cortex-m33|//rt-thread/libcpu/arm/cortex-m4/context_iar.S|//rt-thread/libcpu/arm/cortex-m4/context_rvds.S|//rt-thread/libcpu/arm/cortex-m7|//rt-thread/libcpu/arm/cortex-r4|//rt-thread/libcpu/arm/dm36x|//rt-thread/libcpu/arm/lpc214x|//rt-thread/libcpu/arm/lpc24xx|//rt-thread/libcpu/arm/realview-a8-vmm|//rt-thread/libcpu/arm/s3c24x0|//rt-thread/libcpu/arm/s3c44b0|//rt-thread/libcpu/arm/sep4020|//rt-thread/libcpu/arm/zynqmp-r5|//rt-thread/libcpu/avr32|//rt-thread/libcpu/blackfin|//rt-thread/libcpu/c-sky|//rt-thread/libcpu/ia32|//rt-thread/libcpu/m16c|//rt-thread/libcpu/mips|//rt-thread/libcpu/nios|//rt-thread/libcpu/ppc|//rt-thread/libcpu/risc-v|//rt-thread/libcpu/rx|//rt-thread/libcpu/sim|//rt-thread/libcpu/sparc-v8|//rt-thread/libcpu/ti-dsp|//rt-thread/libcpu/unicore32|//rt-thread/libcpu/v850|//rt-thread/libcpu/xilinx|//rt-thread/src/cpu.c|//rt-thread/src/memheap.c|//rt-thread/src/signal.c|//rt-thread/src/slab.c|//rt-thread/tools" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="" />
+            <entry excluding="//cubemx/Drivers|//cubemx/EWARM|//cubemx/Src/stm32f4xx_it.c|//cubemx/Src/system_stm32f4xx.c|//packages/lvgl-8.3.11/demos|//packages/lvgl-8.3.11/env_support/rt-thread/squareline|//packages/lvgl-8.3.11/examples|//packages/lvgl-8.3.11/tests|//rt-thread/components/dfs|//rt-thread/components/drivers/audio|//rt-thread/components/drivers/can|//rt-thread/components/drivers/cputime|//rt-thread/components/drivers/hwcrypto|//rt-thread/components/drivers/hwtimer|//rt-thread/components/drivers/misc/adc.c|//rt-thread/components/drivers/misc/dac.c|//rt-thread/components/drivers/misc/pulse_encoder.c|//rt-thread/components/drivers/misc/rt_drv_pwm.c|//rt-thread/components/drivers/misc/rt_inputcapture.c|//rt-thread/components/drivers/mtd|//rt-thread/components/drivers/phy|//rt-thread/components/drivers/pm|//rt-thread/components/drivers/rtc|//rt-thread/components/drivers/sdio|//rt-thread/components/drivers/sensors|//rt-thread/components/drivers/serial/serial_v2.c|//rt-thread/components/drivers/spi/enc28j60.c|//rt-thread/components/drivers/spi/qspi_core.c|//rt-thread/components/drivers/spi/sfud|//rt-thread/components/drivers/spi/spi-bit-ops.c|//rt-thread/components/drivers/spi/spi_flash_sfud.c|//rt-thread/components/drivers/spi/spi_msd.c|//rt-thread/components/drivers/spi/spi_wifi_rw009.c|//rt-thread/components/drivers/touch|//rt-thread/components/drivers/usb|//rt-thread/components/drivers/watchdog|//rt-thread/components/drivers/wlan|//rt-thread/components/fal|//rt-thread/components/finsh/msh_file.c|//rt-thread/components/legacy|//rt-thread/components/libc/compilers/armlibc|//rt-thread/components/libc/compilers/dlib|//rt-thread/components/libc/cplusplus|//rt-thread/components/libc/posix|//rt-thread/components/lwp|//rt-thread/components/net|//rt-thread/components/utilities|//rt-thread/components/vbus|//rt-thread/components/vmm|//rt-thread/libcpu/aarch64|//rt-thread/libcpu/arc|//rt-thread/libcpu/arm/AT91SAM7S|//rt-thread/libcpu/arm/AT91SAM7X|//rt-thread/libcpu/arm/am335x|//rt-thread/libcpu/arm/arm926|//rt-thread/libcpu/arm/armv6|//rt-thread/libcpu/arm/common/divsi3.S|//rt-thread/libcpu/arm/cortex-a|//rt-thread/libcpu/arm/cortex-m0|//rt-thread/libcpu/arm/cortex-m23|//rt-thread/libcpu/arm/cortex-m3|//rt-thread/libcpu/arm/cortex-m33|//rt-thread/libcpu/arm/cortex-m4/context_iar.S|//rt-thread/libcpu/arm/cortex-m4/context_rvds.S|//rt-thread/libcpu/arm/cortex-m7|//rt-thread/libcpu/arm/cortex-r4|//rt-thread/libcpu/arm/dm36x|//rt-thread/libcpu/arm/lpc214x|//rt-thread/libcpu/arm/lpc24xx|//rt-thread/libcpu/arm/realview-a8-vmm|//rt-thread/libcpu/arm/s3c24x0|//rt-thread/libcpu/arm/s3c44b0|//rt-thread/libcpu/arm/sep4020|//rt-thread/libcpu/arm/zynqmp-r5|//rt-thread/libcpu/avr32|//rt-thread/libcpu/blackfin|//rt-thread/libcpu/c-sky|//rt-thread/libcpu/ia32|//rt-thread/libcpu/m16c|//rt-thread/libcpu/mips|//rt-thread/libcpu/nios|//rt-thread/libcpu/ppc|//rt-thread/libcpu/risc-v|//rt-thread/libcpu/rx|//rt-thread/libcpu/sim|//rt-thread/libcpu/sparc-v8|//rt-thread/libcpu/ti-dsp|//rt-thread/libcpu/unicore32|//rt-thread/libcpu/v850|//rt-thread/libcpu/xilinx|//rt-thread/src/cpu.c|//rt-thread/src/memheap.c|//rt-thread/src/signal.c|//rt-thread/src/slab.c|//rt-thread/tools" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="" />
           </sourceEntries>
         </configuration>
       </storageModule>

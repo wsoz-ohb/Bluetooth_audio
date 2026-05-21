@@ -8,6 +8,7 @@
 #include "es8311_driver.h"
 #include "stm32f4xx_hal.h"
 #include "stm32f4xx_hal_i2s_ex.h"
+#include "audio_define.h"
 
 #define DBG_TAG "es8311_audio"
 #define DBG_LVL DBG_WARNING
@@ -1424,4 +1425,154 @@ void DMA1_Stream4_IRQHandler(void)
     rt_interrupt_enter();
     HAL_DMA_IRQHandler(&es8311_audio_ctx.hdma_i2s2_tx);
     rt_interrupt_leave();
+}
+
+
+rt_err_t boot_prompt_play_once(void)
+{
+#define BOOT_PROMPT_SAMPLE_RATE          44100u
+#define BOOT_PROMPT_CHANNELS            1u
+#define BOOT_PROMPT_CHUNK_FRAMES        512u
+#define BOOT_PROMPT_TAIL_SILENCE_FRAMES 2048u
+#define BOOT_PROMPT_STOP_LEVEL_FRAMES   512u
+#define BOOT_PROMPT_WAIT_MS             2u
+#define BOOT_PROMPT_VOLUME_PERCENT      0   //10
+
+    static const rt_int16_t boot_prompt_silence[BOOT_PROMPT_CHUNK_FRAMES] = {0};
+    rt_int16_t scaled_pcm[BOOT_PROMPT_CHUNK_FRAMES];
+    rt_uint32_t offset = 0u;
+    rt_uint32_t tail_offset = 0u;
+    rt_bool_t playback_started = RT_FALSE;
+    rt_err_t result = RT_EOK;
+
+    if (es8311_audio_configure(BOOT_PROMPT_SAMPLE_RATE, BOOT_PROMPT_CHANNELS) != RT_EOK)
+    {
+        result = -RT_ERROR;
+        goto exit;
+    }
+
+    if (es8311_audio_start_playback() != RT_EOK)
+    {
+        result = -RT_ERROR;
+        goto exit;
+    }
+    playback_started = RT_TRUE;
+
+    while (offset < boot_prompt_pcm_len)
+    {
+        rt_uint32_t free_frames;
+        rt_uint32_t frames;
+        rt_uint32_t written;
+        rt_uint32_t frame_index;
+        es8311_audio_playback_write_status_t status;
+
+        free_frames = es8311_audio_get_playback_free_frames();
+        if (free_frames == 0u)
+        {
+            rt_thread_mdelay(BOOT_PROMPT_WAIT_MS);
+            continue;
+        }
+
+        frames = boot_prompt_pcm_len - offset;
+        if (frames > BOOT_PROMPT_CHUNK_FRAMES)
+        {
+            frames = BOOT_PROMPT_CHUNK_FRAMES;
+        }
+        if (frames > free_frames)
+        {
+            frames = free_frames;
+        }
+
+        for (frame_index = 0u; frame_index < frames; frame_index++)
+        {
+            scaled_pcm[frame_index] = (rt_int16_t) (((rt_int32_t) boot_prompt_pcm[offset + frame_index] *
+                                                     BOOT_PROMPT_VOLUME_PERCENT) / 100);
+        }
+
+        written = es8311_audio_write_playback_checked(scaled_pcm,
+                                                      frames,
+                                                      BOOT_PROMPT_CHANNELS,
+                                                      BOOT_PROMPT_SAMPLE_RATE,
+                                                      &status);
+        if (written == 0u)
+        {
+            if (status == ES8311_AUDIO_PLAYBACK_WRITE_BUFFER_FULL)
+            {
+                rt_thread_mdelay(BOOT_PROMPT_WAIT_MS);
+                continue;
+            }
+
+            result = -RT_ERROR;
+            goto stop_playback;
+        }
+
+        offset += written;
+    }
+
+    while (tail_offset < BOOT_PROMPT_TAIL_SILENCE_FRAMES)
+    {
+        rt_uint32_t free_frames;
+        rt_uint32_t frames;
+        rt_uint32_t written;
+        es8311_audio_playback_write_status_t status;
+
+        free_frames = es8311_audio_get_playback_free_frames();
+        if (free_frames == 0u)
+        {
+            rt_thread_mdelay(BOOT_PROMPT_WAIT_MS);
+            continue;
+        }
+
+        frames = BOOT_PROMPT_TAIL_SILENCE_FRAMES - tail_offset;
+        if (frames > BOOT_PROMPT_CHUNK_FRAMES)
+        {
+            frames = BOOT_PROMPT_CHUNK_FRAMES;
+        }
+        if (frames > free_frames)
+        {
+            frames = free_frames;
+        }
+
+        written = es8311_audio_write_playback_checked(boot_prompt_silence,
+                                                      frames,
+                                                      BOOT_PROMPT_CHANNELS,
+                                                      BOOT_PROMPT_SAMPLE_RATE,
+                                                      &status);
+        if (written == 0u)
+        {
+            if (status == ES8311_AUDIO_PLAYBACK_WRITE_BUFFER_FULL)
+            {
+                rt_thread_mdelay(BOOT_PROMPT_WAIT_MS);
+                continue;
+            }
+
+            result = -RT_ERROR;
+            goto stop_playback;
+        }
+
+        tail_offset += written;
+    }
+
+    while (es8311_audio_get_playback_level_frames() > BOOT_PROMPT_STOP_LEVEL_FRAMES)
+    {
+        rt_thread_mdelay(BOOT_PROMPT_WAIT_MS);
+    }
+
+stop_playback:
+    if (playback_started)
+    {
+        es8311_audio_stop_playback();
+        es8311_audio_flush_playback();
+    }
+
+exit:
+#undef BOOT_PROMPT_SAMPLE_RATE
+#undef BOOT_PROMPT_CHANNELS
+#undef BOOT_PROMPT_CHUNK_FRAMES
+#undef BOOT_PROMPT_TAIL_SILENCE_FRAMES
+#undef BOOT_PROMPT_STOP_LEVEL_FRAMES
+#undef BOOT_PROMPT_WAIT_MS
+#undef BOOT_PROMPT_VOLUME_PERCENT
+
+    return result;
 }

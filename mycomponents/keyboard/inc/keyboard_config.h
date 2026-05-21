@@ -47,7 +47,7 @@
  * - 矩阵行输出，选通电平是高(1)还是低(0)
  */
 #ifndef KB_GPIO_ACTIVE_LEVEL
-#define KB_GPIO_ACTIVE_LEVEL 0u
+#define KB_GPIO_ACTIVE_LEVEL 1u
 #endif
 
 #ifndef KB_MATRIX_ACTIVE_LEVEL
