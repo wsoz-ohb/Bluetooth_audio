@@ -124,8 +124,6 @@ void lv_user_gui_init(void)
     scr = lv_scr_act();
     lv_obj_clean(scr);
     lv_obj_set_style_bg_color(scr, lv_color_hex(0x09111F), 0);
-    lv_obj_set_style_bg_grad_color(scr, lv_color_hex(0x132238), 0);
-    lv_obj_set_style_bg_grad_dir(scr, LV_GRAD_DIR_VER, 0);
     lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
 
     title = lv_label_create(scr);

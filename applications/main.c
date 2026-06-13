@@ -14,7 +14,7 @@
 #include <rtdbg.h>
 #include "bt_app.h"
 #include "es8311_audio.h"
-#include "key_app.h"
+#include <control_app.h>
 #include "mylvgl_app.h"
 
 int main(void)
@@ -30,15 +30,14 @@ int main(void)
         LOG_E("bt__init failed");
     }
 
-    if (key_app_init() != RT_EOK)
+    if (control_app_init() != RT_EOK)
     {
-           LOG_E("key_app_init failed");
+           LOG_E("control_app_init failed");
     }
 
     lv_user_gui_init();
     while (1)
     {
-        lv_user_gui_init();
         rt_thread_mdelay(10);
     }
 
