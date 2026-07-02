@@ -9,7 +9,9 @@
  */
 #include "mylvgl_app.h"
 #include "lcd_app.h"
+#include "gui_manager.h"
 
+#include <rtthread.h>
 #include <lvgl.h>
 #include <lcd.h>
 
@@ -106,68 +108,13 @@ void lv_port_indev_init(void)
 
 }
 
-
 void lv_user_gui_init(void)
 {
-    lv_obj_t *scr;
-    lv_obj_t *title;
-    lv_obj_t *card;
-    lv_obj_t *label;
-    lv_obj_t *bar;
-
     if (lv_disp_get_default() == RT_NULL)
     {
         LOG_E("lvgl display is not registered yet");
         return;
     }
 
-    scr = lv_scr_act();
-    lv_obj_clean(scr);
-    lv_obj_set_style_bg_color(scr, lv_color_hex(0x09111F), 0);
-    lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
-
-    title = lv_label_create(scr);
-    lv_label_set_text(title, "Bluetooth Audio");
-    lv_obj_set_style_text_color(title, lv_color_white(), 0);
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_14, 0);
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 18);
-
-    label = lv_label_create(scr);
-    lv_label_set_text(label, "ST7789  LVGL  Static Demo");
-    lv_obj_set_style_text_color(label, lv_palette_lighten(LV_PALETTE_BLUE_GREY, 4), 0);
-    lv_obj_align_to(label, title, LV_ALIGN_OUT_BOTTOM_MID, 0, 6);
-
-    card = lv_obj_create(scr);
-    lv_obj_set_size(card, 212, 148);
-    lv_obj_align(card, LV_ALIGN_CENTER, 0, 14);
-    lv_obj_set_style_radius(card, 14, 0);
-    lv_obj_set_style_border_width(card, 2, 0);
-    lv_obj_set_style_border_color(card, lv_palette_main(LV_PALETTE_LIGHT_BLUE), 0);
-    lv_obj_set_style_bg_color(card, lv_color_hex(0x1C2541), 0);
-    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
-    lv_obj_set_style_pad_all(card, 14, 0);
-    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
-
-    label = lv_label_create(card);
-    lv_label_set_text(label, "LVGL demo ready");
-    lv_obj_set_style_text_color(label, lv_color_white(), 0);
-    lv_obj_align(label, LV_ALIGN_TOP_LEFT, 0, 0);
-
-    label = lv_label_create(card);
-    lv_label_set_text(label, "LCD : ST7789 SPI1\nAudio : ES8311\nMode : A2DP Sink");
-    lv_obj_set_style_text_color(label, lv_palette_lighten(LV_PALETTE_BLUE_GREY, 4), 0);
-    lv_obj_align(label, LV_ALIGN_TOP_LEFT, 0, 30);
-
-    bar = lv_bar_create(card);
-    lv_obj_set_size(bar, 160, 10);
-    lv_obj_align(bar, LV_ALIGN_BOTTOM_MID, 0, -24);
-    lv_bar_set_range(bar, 0, 100);
-    lv_bar_set_value(bar, 72, LV_ANIM_OFF);
-
-    label = lv_label_create(card);
-    lv_label_set_text(label, "Volume 72%");
-    lv_obj_set_style_text_color(label, lv_color_white(), 0);
-    lv_obj_align(label, LV_ALIGN_BOTTOM_MID, 0, 0);
-
-    LOG_I("static lvgl demo started");
+    gui_manager_init();
 }

@@ -15,7 +15,7 @@
 #include "bt_app.h"
 #include "es8311_audio.h"
 #include <control_app.h>
-#include "mylvgl_app.h"
+#include "gui_manager.h"
 
 int main(void)
 {
@@ -24,6 +24,9 @@ int main(void)
         LOG_E("es8311_audio_init failed");
     }
     boot_prompt_play_once();
+    /* 提示音是同步阻塞播放的，返回即代表播放完成。
+     * 通知 LVGL 线程可以淡出欢迎界面、切换到主界面。 */
+    mylvgl_notify_boot_prompt_done();
 
     if (bt__init() != RT_EOK)
     {
@@ -35,7 +38,6 @@ int main(void)
            LOG_E("control_app_init failed");
     }
 
-    lv_user_gui_init();
     while (1)
     {
         rt_thread_mdelay(10);

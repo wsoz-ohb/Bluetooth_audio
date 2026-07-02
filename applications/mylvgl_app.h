@@ -10,9 +10,6 @@
 #ifndef APPLICATIONS_MYLVGL_APP_H_
 #define APPLICATIONS_MYLVGL_APP_H_
 
-#include <rtthread.h>
-#include <stdint.h>
-
 void lv_port_disp_init(void);
 void lv_port_indev_init(void);
 void lv_user_gui_init(void);
