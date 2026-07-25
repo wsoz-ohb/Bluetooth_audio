@@ -113,6 +113,12 @@ rt_err_t es8311_stop_record(void);
 /* 设置模拟 MIC PGA 增益。当前只对模拟 MIC 输入路径生效。 */
 rt_err_t es8311_set_mic_gain(es8311_mic_gain_t mic_gain);
 
+/* 设置 DAC 数字音量寄存器值(0x32)。0x00 最小，约 0xBF 为 0dB。 */
+rt_err_t es8311_set_dac_volume(rt_uint8_t volume_reg);
+
+/* 读取当前缓存的 DAC 数字音量寄存器值。 */
+rt_uint8_t es8311_get_dac_volume(void);
+
 /* 读取当前驱动配置快照。 */
 const es8311_config_t * es8311_get_config(void);
 

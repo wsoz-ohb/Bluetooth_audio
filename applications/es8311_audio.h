@@ -63,6 +63,10 @@ rt_uint32_t es8311_audio_get_playback_free_frames(void);
 rt_uint32_t es8311_audio_get_sample_rate(void);
 rt_bool_t es8311_audio_is_playback_running(void);
 
+/* 本地播放音量，范围 0~127，与 AVRCP Absolute Volume 对齐。 */
+rt_err_t es8311_audio_set_volume(rt_uint8_t volume_0_127);
+rt_uint8_t es8311_audio_get_volume(void);
+
 rt_err_t es8311_audio_start_capture(void);
 void es8311_audio_stop_capture(void);
 void es8311_audio_flush_capture(void);

@@ -65,19 +65,20 @@ static void control_key_event_cb(const char *keyname, uint16_t key_id, kb_event_
 
     if (evt == KB_EVT_CLICK) //单击暂停/继续
     {
-        // 先查询当前状态，如果正在播放则暂停，否则继续
-        switch(bt_avrcp_ct_get_playback_state())
+        /* PLAYING -> pause；PAUSED/STOPPED/UNKNOWN -> play。
+         * 之前 PAUSED/UNKNOWN 落入 default 会直接丢弃，导致只能暂停一次。 */
+        switch (bt_avrcp_ct_get_playback_state())
         {
-            case BT_AVRCP_CT_PLAYBACK_STATE_STOPPED:
-                bt_avrcp_ct_play();
-                break;
-            
-            case BT_AVRCP_CT_PLAYBACK_STATE_PLAYING:
-                bt_avrcp_ct_pause();
-                break;
+        case BT_AVRCP_CT_PLAYBACK_STATE_PLAYING:
+            bt_avrcp_ct_pause();
+            break;
 
-            default:
-                break;
+        case BT_AVRCP_CT_PLAYBACK_STATE_PAUSED:
+        case BT_AVRCP_CT_PLAYBACK_STATE_STOPPED:
+        case BT_AVRCP_CT_PLAYBACK_STATE_UNKNOWN:
+        default:
+            bt_avrcp_ct_play();
+            break;
         }
     }
 
@@ -216,7 +217,9 @@ static void control_encoder_poll(void)
         if (bt_avrcp_ct_volume_up() == RT_EOK)
         {
             g_encoder_pending_cmds--;
-            LOG_D("encoder CW -> volume up, pending=%d", g_encoder_pending_cmds);
+            LOG_D("encoder CW -> volume up (%s), pending=%d",
+                  bt_avrcp_ct_is_absolute_volume_active() ? "absolute" : "relative",
+                  g_encoder_pending_cmds);
         }
         g_encoder_last_cmd_tick = current_tick;
     }
@@ -225,7 +228,9 @@ static void control_encoder_poll(void)
         if (bt_avrcp_ct_volume_down() == RT_EOK)
         {
             g_encoder_pending_cmds++;
-            LOG_D("encoder CCW -> volume down, pending=%d", g_encoder_pending_cmds);
+            LOG_D("encoder CCW -> volume down (%s), pending=%d",
+                  bt_avrcp_ct_is_absolute_volume_active() ? "absolute" : "relative",
+                  g_encoder_pending_cmds);
         }
         g_encoder_last_cmd_tick = current_tick;
     }

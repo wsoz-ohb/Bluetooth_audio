@@ -84,7 +84,7 @@
 #define ES8311_I2C_RETRY_COUNT           8
 #define ES8311_I2C_RETRY_DELAY_MS        2u
 #define ES8311_VMID_STARTUP_DELAY_MS     20u
-#define ES8311_DEFAULT_DAC_VOLUME        0xC0u
+#define ES8311_DEFAULT_DAC_VOLUME        0xBFu  /* ~0dB, absolute-volume max */
 #define ES8311_POWER_UP_ANALOG           0x01u
 #define ES8311_POWER_UP_ADC_DAC          0x02u
 #define ES8311_PLAYBACK_BCLK_CFG         0x03u
@@ -95,6 +95,7 @@ typedef struct
 {
     struct rt_i2c_bus_device * bus;
     es8311_config_t config;
+    rt_uint8_t dac_volume_reg;
     rt_bool_t inited;
     rt_bool_t playback_started;
     rt_bool_t record_started;
@@ -491,7 +492,7 @@ static rt_err_t es8311_apply_playback_defaults(const es8311_config_t * config)
         return -RT_ERROR;
     }
 
-    if (es8311_write_register(ES8311_DAC2_REG, ES8311_DEFAULT_DAC_VOLUME) != RT_EOK)
+    if (es8311_write_register(ES8311_DAC2_REG, es8311_ctx.dac_volume_reg) != RT_EOK)
     {
         return -RT_ERROR;
     }
@@ -622,6 +623,7 @@ rt_err_t es8311_init(void)
     rt_err_t err;
 
     rt_memset(&es8311_ctx, 0, sizeof(es8311_ctx));
+    es8311_ctx.dac_volume_reg = ES8311_DEFAULT_DAC_VOLUME;
     es8311_ctx.bus = (struct rt_i2c_bus_device *) rt_device_find(RT_I2C_DEVICE);
     if (es8311_ctx.bus == RT_NULL)
     {
@@ -864,6 +866,29 @@ rt_err_t es8311_set_mic_gain(es8311_mic_gain_t mic_gain)
     }
 
     return RT_EOK;
+}
+
+
+rt_err_t es8311_set_dac_volume(rt_uint8_t volume_reg)
+{
+    es8311_ctx.dac_volume_reg = volume_reg;
+
+    if (!es8311_ctx.inited)
+    {
+        return RT_EOK;
+    }
+
+    if (es8311_write_register(ES8311_DAC2_REG, volume_reg) != RT_EOK)
+    {
+        return -RT_ERROR;
+    }
+
+    return RT_EOK;
+}
+
+rt_uint8_t es8311_get_dac_volume(void)
+{
+    return es8311_ctx.dac_volume_reg;
 }
 
 const es8311_config_t * es8311_get_config(void)

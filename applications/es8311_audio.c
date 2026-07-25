@@ -67,6 +67,7 @@ typedef struct
     rt_uint32_t capture_drop_frames;
     rt_uint32_t sample_rate;
     rt_uint8_t playback_channels;
+    rt_uint8_t volume_0_127;
     rt_uint8_t capture_slot;
     rt_bool_t capture_slot_locked;
     rt_bool_t capture_diag_printed;
@@ -715,6 +716,28 @@ static void es8311_audio_tx_dma_callback(DMA_HandleTypeDef * hdma)
     RT_UNUSED(hdma);
 }
 
+
+/* AVRCP absolute volume 0~127 映射到 ES8311 DAC 寄存器。
+ * 0x00 最小，0xBF 约 0dB；超过 0xBF 的正增益先不用。
+ * 默认用满量程：相对音量时对端改 PCM 幅值，本地增益必须拉满，
+ * 否则电脑/手机音量拉满也会偏小；绝对音量会在连接后覆盖此值。 */
+#define ES8311_AUDIO_VOLUME_MAX           127u
+#define ES8311_AUDIO_DAC_REG_MAX          0xBFu
+#define ES8311_AUDIO_DEFAULT_VOLUME       127u
+
+static rt_uint8_t es8311_audio_map_volume_to_dac_reg(rt_uint8_t volume_0_127)
+{
+    rt_uint32_t mapped;
+
+    if (volume_0_127 > ES8311_AUDIO_VOLUME_MAX)
+    {
+        volume_0_127 = ES8311_AUDIO_VOLUME_MAX;
+    }
+
+    mapped = ((rt_uint32_t) volume_0_127 * ES8311_AUDIO_DAC_REG_MAX) / ES8311_AUDIO_VOLUME_MAX;
+    return (rt_uint8_t) mapped;
+}
+
 rt_err_t es8311_audio_init(void)
 {
     if (es8311_audio_ctx.inited)
@@ -732,6 +755,11 @@ rt_err_t es8311_audio_init(void)
 
     es8311_audio_ctx.playback_channels = ES8311_AUDIO_PLAYBACK_OUTPUT_CHANNELS;
     es8311_audio_ctx.sample_rate = ES8311_AUDIO_DEFAULT_SAMPLE_RATE;
+    es8311_audio_ctx.volume_0_127 = ES8311_AUDIO_DEFAULT_VOLUME;
+    if (es8311_set_dac_volume(es8311_audio_map_volume_to_dac_reg(es8311_audio_ctx.volume_0_127)) != RT_EOK)
+    {
+        LOG_W("es8311 default dac volume apply failed");
+    }
     es8311_audio_ctx.inited = RT_TRUE;
     es8311_audio_reset_playback_ring_locked();
     es8311_audio_reset_capture_ring_locked();
@@ -743,7 +771,10 @@ rt_err_t es8311_audio_init(void)
         return -RT_ERROR;
     }
 
-    LOG_I("es8311 audio init ok, sample_rate=%u", es8311_audio_ctx.sample_rate);
+    LOG_I("es8311 audio init ok, sample_rate=%u, volume=%u/127, dac_reg=0x%02x",
+          es8311_audio_ctx.sample_rate,
+          es8311_audio_ctx.volume_0_127,
+          es8311_audio_map_volume_to_dac_reg(es8311_audio_ctx.volume_0_127));
     return RT_EOK;
 }
 
@@ -757,6 +788,40 @@ rt_bool_t es8311_audio_is_inited(void)
     rt_hw_interrupt_enable(level);
 
     return inited;
+}
+
+rt_err_t es8311_audio_set_volume(rt_uint8_t volume_0_127)
+{
+    rt_uint8_t dac_reg;
+    rt_err_t err;
+
+    if (!es8311_audio_ctx.inited)
+    {
+        return -RT_ERROR;
+    }
+
+    if (volume_0_127 > ES8311_AUDIO_VOLUME_MAX)
+    {
+        volume_0_127 = ES8311_AUDIO_VOLUME_MAX;
+    }
+
+    dac_reg = es8311_audio_map_volume_to_dac_reg(volume_0_127);
+    err = es8311_set_dac_volume(dac_reg);
+    if (err != RT_EOK)
+    {
+        return err;
+    }
+
+    es8311_audio_ctx.volume_0_127 = volume_0_127;
+    LOG_I("local playback volume=%u/127, dac_reg=0x%02x",
+          volume_0_127,
+          dac_reg);
+    return RT_EOK;
+}
+
+rt_uint8_t es8311_audio_get_volume(void)
+{
+    return es8311_audio_ctx.volume_0_127;
 }
 
 rt_err_t es8311_audio_configure(rt_uint32_t sample_rate, rt_uint8_t playback_channels)

@@ -47,4 +47,7 @@ rt_err_t bt_avrcp_ct_previous(void);
 rt_err_t bt_avrcp_ct_volume_up(void);
 rt_err_t bt_avrcp_ct_volume_down(void);
 
+/* 对端是否已启用绝对音量（由 SetAbsoluteVolume / VOLUME_CHANGED 推断）。 */
+rt_bool_t bt_avrcp_ct_is_absolute_volume_active(void);
+
 #endif /* APPLICATIONS_BT_AVRCP_CT_APP_H_ */
