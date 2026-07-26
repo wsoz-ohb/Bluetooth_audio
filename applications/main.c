@@ -16,9 +16,15 @@
 #include "es8311_audio.h"
 #include <control_app.h>
 #include "gui_manager.h"
+#include "sfud_app.h"
 
 int main(void)
 {
+    if (sfud_app_init() != RT_EOK)
+    {
+        LOG_E("sfud_app_init failed");
+    }
+
     if (es8311_audio_init() != RT_EOK)
     {
         LOG_E("es8311_audio_init failed");

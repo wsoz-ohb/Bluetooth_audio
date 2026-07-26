@@ -26,7 +26,8 @@
 #define LCD_SPI_DEVICE_NAME     "st7789"
 #define LCD_SPI_MAX_HZ          (20 * 1000 * 1000)
 
-#define LCD_CS_GPIOX            GPIOA
+/* LCD CS 改到 PC4，给 SPI Flash 让出 PA4/PA6。 */
+#define LCD_CS_GPIOX            GPIOC
 #define LCD_CS_GPIO_PIN         GPIO_PIN_4
 #define LCD_DC_PIN              GET_PIN(E, 4)
 #define LCD_RST_PIN             GET_PIN(E, 5)
