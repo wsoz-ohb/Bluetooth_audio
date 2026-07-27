@@ -7,6 +7,7 @@ MEMORY
 {
     ROM (rx) : ORIGIN = 0x08000000, LENGTH =  1024k /* 1024K flash */
     RAM (rw) : ORIGIN = 0x20000000, LENGTH =  128k /* 128K sram */
+    CCM (rw) : ORIGIN = 0x10000000, LENGTH =  64k  /* 64K core-coupled RAM, CPU only, no DMA */
 }
 ENTRY(Reset_Handler)
 _system_stack_size = 0x400;
@@ -112,6 +113,19 @@ SECTIONS
         . = ALIGN(4);
         _estack = .;
     } >RAM
+
+    /* CPU-only big buffers (audio ring, LVGL draw buf...) live in CCM RAM.
+     * CCM is NOT reachable by DMA and is NOT zeroed by startup code:
+     * board.c clears [__ccm_bss_start, __ccm_bss_end) manually. */
+    .ccmbss (NOLOAD) :
+    {
+        . = ALIGN(4);
+        __ccm_bss_start = .;
+        *(.ccmbss)
+        *(.ccmbss.*)
+        . = ALIGN(4);
+        __ccm_bss_end = .;
+    } > CCM
 
     __bss_start = .;
     .bss :

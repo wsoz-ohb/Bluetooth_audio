@@ -14,6 +14,8 @@
  * 3) JEDEC 用全双工 rt_spi_transfer 一次读完，不要分两段 send_then_recv
  * 4) 探卡时钟先 1MHz，成功后再提到工作频率
  * 5) 先手动读 JEDEC(EF 40 18) 确认物理层，再交给 SFUD probe
+ * 6) 出厂/上电后状态寄存器可能带写保护(BP 位非零)，擦写会被芯片静默丢弃
+ *    ——见本文件末尾的“写保护踩坑”说明，初始化时已自动解除
  * ---------------------------------------------------------------------------
  */
 #include "sfud_app.h"
@@ -21,6 +23,7 @@
 #include <rtdevice.h>
 #include <board.h>
 #include <drv_spi.h>
+#include <sfud.h>
 
 #define DBG_TAG "sfud_app"
 #define DBG_LVL DBG_INFO
@@ -302,6 +305,32 @@ rt_err_t sfud_app_init(void)
     (void)sfud_app_configure_spi(SFUD_SPI_WORK_HZ);
 
     sfud_dev = (sfud_flash_t)g_flash_dev->user_data;
+
+    /*
+     * 【写保护踩坑】实测这颗 W25Q128 上电后状态寄存器 = 0x3C，BP 位(TB/BP3..BP0)
+     * 全置位，等于把整片 16MB 都保护了。表现极其隐蔽：读完全正常，PROGRAM/ERASE
+     * 命令被芯片"静默丢弃"(不报错、不写入)，SFUD/FAL 都会回 success 但内容纹丝不动。
+     * 现象：擦完不变 FF、写完读回原值、YMODEM 传 256KB 字节计数全对但落盘全是旧数据。
+     * 对策：初始化时主动读状态寄存器，BP 位非零就写 0x00 解除保护。
+     * 上一任用户(OTA demo)残留的保护位就是这么被继承下来的。
+     */
+    if (sfud_dev != RT_NULL)
+    {
+        uint8_t sreg = 0;
+        if (sfud_read_status(sfud_dev, &sreg) == SFUD_SUCCESS && (sreg & 0x3C) != 0)
+        {
+            LOG_W("W25Q status reg=0x%02X, BP bits set -> clearing write protect", sreg);
+            if (sfud_write_status(sfud_dev, RT_FALSE, 0x00) == SFUD_SUCCESS)
+            {
+                LOG_I("write protect cleared");
+            }
+            else
+            {
+                LOG_E("clear write protect FAILED, erase/write will be silently ignored!");
+            }
+        }
+    }
+
     if (sfud_dev != RT_NULL)
     {
         LOG_I("SFUD ready: name=%s, capacity=%d KB, erase=%d, write_mode=0x%02x, jedec=%02X%02X%02X",

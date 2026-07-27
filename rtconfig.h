@@ -134,6 +134,8 @@
 
 /* Utilities */
 
+#define RT_USING_RYM
+
 /* end of Utilities */
 /* end of RT-Thread Components */
 

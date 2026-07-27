@@ -16,6 +16,13 @@ RT_WEAK void rt_hw_board_init()
 {
     extern void hw_board_init(char *clock_src, int32_t clock_src_freq, int32_t clock_target_freq);
 
+    /* .ccmbss 不在启动汇编的清零范围内(它只清主 RAM 的 .bss),这里手动清。
+     * CCM 时钟在 F407 复位后默认开启,可直接访问。 */
+    {
+        extern rt_uint8_t __ccm_bss_start, __ccm_bss_end;
+        rt_memset(&__ccm_bss_start, 0, &__ccm_bss_end - &__ccm_bss_start);
+    }
+
     /* Heap initialization */
 #if defined(RT_USING_HEAP)
     rt_system_heap_init((void *) HEAP_BEGIN, (void *) HEAP_END);

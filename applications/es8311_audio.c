@@ -77,10 +77,15 @@ typedef struct
 } es8311_audio_context_t;
 
 static es8311_audio_context_t es8311_audio_ctx;
+/* dma_tx/rx 是 I2S DMA 直接搬运的缓冲,必须留在主 RAM(CCM 对 DMA 不可见) */
 static rt_uint16_t es8311_audio_dma_tx_buffer[ES8311_AUDIO_DMA_TX_SAMPLES];
 static rt_uint16_t es8311_audio_dma_rx_buffer[ES8311_AUDIO_DMA_RX_SAMPLES];
-static rt_int16_t es8311_audio_playback_buffer[ES8311_AUDIO_PLAYBACK_BUFFER_SAMPLES];
-static rt_int16_t es8311_audio_capture_buffer[ES8311_AUDIO_CAPTURE_BUFFER_SAMPLES];
+/* 环形缓冲只有 CPU 读写(写:蓝牙线程,读:DMA 半传输中断里 memcpy 到 dma_tx),
+ * 放 CCM RAM(64KB, 0x10000000)给主 RAM 的堆腾空间 */
+static rt_int16_t es8311_audio_playback_buffer[ES8311_AUDIO_PLAYBACK_BUFFER_SAMPLES]
+    __attribute__((section(".ccmbss.es8311_playback")));
+static rt_int16_t es8311_audio_capture_buffer[ES8311_AUDIO_CAPTURE_BUFFER_SAMPLES]
+    __attribute__((section(".ccmbss.es8311_capture")));
 
 typedef struct
 {
