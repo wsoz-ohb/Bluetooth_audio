@@ -51,9 +51,13 @@ static bt_avrcp_ct_link_state_t bt_avrcp_ct_link_state = BT_AVRCP_CT_LINK_STATE_
 static bt_avrcp_ct_playback_state_t bt_avrcp_ct_playback_state = BT_AVRCP_CT_PLAYBACK_STATE_UNKNOWN;
 static bt_avrcp_ct_op_state_t bt_avrcp_ct_op_state = BT_AVRCP_CT_OP_STATE_IDLE;
 static rt_bool_t bt_avrcp_ct_playback_status_notify_enabled = RT_FALSE;
-/* 当前曲目总时长/进度缓存，供 pos 日志打印 “当前/总时长”。 */
+/* 当前曲目总时长/进度缓存，供 pos 日志与 GUI 进度条使用。 */
 static uint32_t bt_avrcp_ct_song_length_ms = 0u;
 static uint32_t bt_avrcp_ct_song_position_ms = 0u;
+/* Now Playing 文本缓存（手机侧通常 UTF-8）。 */
+#define BT_AVRCP_CT_META_TEXT_MAX  64u
+static char bt_avrcp_ct_title[BT_AVRCP_CT_META_TEXT_MAX];
+static char bt_avrcp_ct_artist[BT_AVRCP_CT_META_TEXT_MAX];
 static btstack_context_callback_registration_t bt_avrcp_ct_command_registration;
 static bt_avrcp_ct_command_t bt_avrcp_ct_command_queue[BT_APP_AVRCP_CT_COMMAND_QUEUE_SIZE];
 static uint8_t bt_avrcp_ct_command_read_index = 0u;
@@ -249,6 +253,38 @@ static bt_avrcp_ct_playback_state_t bt_avrcp_ct_map_play_status(uint8_t play_sta
     }
 }
 
+static void bt_avrcp_ct_clear_now_playing_text(void)
+{
+    bt_avrcp_ct_title[0] = '\0';
+    bt_avrcp_ct_artist[0] = '\0';
+}
+
+static void bt_avrcp_ct_store_meta_text(char *dst, rt_size_t dst_size,
+                                        const uint8_t *value, uint8_t value_len)
+{
+    uint8_t copy_len;
+
+    if ((dst == RT_NULL) || (dst_size == 0u))
+    {
+        return;
+    }
+
+    if ((value == RT_NULL) || (value_len == 0u))
+    {
+        dst[0] = '\0';
+        return;
+    }
+
+    copy_len = value_len;
+    if (copy_len >= dst_size)
+    {
+        copy_len = (uint8_t)(dst_size - 1u);
+    }
+
+    memcpy(dst, value, copy_len);
+    dst[copy_len] = '\0';
+}
+
 static void bt_avrcp_ct_reset_session_state(void)
 {
     rt_base_t level;
@@ -260,6 +296,7 @@ static void bt_avrcp_ct_reset_session_state(void)
     bt_avrcp_ct_set_absolute_volume_active(RT_FALSE);
     bt_avrcp_ct_song_length_ms = 0u;
     bt_avrcp_ct_song_position_ms = 0u;
+    bt_avrcp_ct_clear_now_playing_text();
 
     level = rt_hw_interrupt_disable();
     bt_avrcp_ct_abs_volume_pending_delta = 0;
@@ -456,6 +493,26 @@ static void bt_avrcp_ct_set_song_length_ms(uint32_t length_ms)
 static void bt_avrcp_ct_set_song_position_ms(uint32_t position_ms)
 {
     bt_avrcp_ct_song_position_ms = position_ms;
+}
+
+const char *bt_avrcp_ct_get_title(void)
+{
+    return bt_avrcp_ct_title;
+}
+
+const char *bt_avrcp_ct_get_artist(void)
+{
+    return bt_avrcp_ct_artist;
+}
+
+uint32_t bt_avrcp_ct_get_song_length_ms(void)
+{
+    return bt_avrcp_ct_song_length_ms;
+}
+
+uint32_t bt_avrcp_ct_get_song_position_ms(void)
+{
+    return bt_avrcp_ct_song_position_ms;
 }
 
 static void bt_avrcp_ct_log_playback_progress(uint32_t position_ms, uint8_t ctype, uint16_t cid)
@@ -1088,9 +1145,10 @@ void btstack_event_avrcp_controller_handler(uint8_t packet_type, uint16_t channe
               avrcp_subevent_notification_track_changed_get_command_type(packet),
               identifier[0], identifier[1], identifier[2], identifier[3],
               identifier[4], identifier[5], identifier[6], identifier[7]);
-        /* 换歌后总时长先清空，等 Now Playing / play_status 再更新。 */
+        /* 换歌后总时长/元数据先清空，等 Now Playing / play_status 再更新。 */
         bt_avrcp_ct_set_song_length_ms(0u);
         bt_avrcp_ct_set_song_position_ms(0u);
+        bt_avrcp_ct_clear_now_playing_text();
         /* 换歌主路径：当前曲目变了就重新拉歌名/歌手/总时长。 */
         bt_avrcp_ct_request_now_playing_info("track_changed");
         break;
@@ -1228,16 +1286,30 @@ void btstack_event_avrcp_controller_handler(uint8_t packet_type, uint16_t channe
         break;
 
     case AVRCP_SUBEVENT_NOW_PLAYING_TITLE_INFO:  // 歌曲名称
-        bt_avrcp_ct_log_text("title",
-                             avrcp_subevent_now_playing_title_info_get_value(packet),
-                             avrcp_subevent_now_playing_title_info_get_value_len(packet));
+    {
+        const uint8_t *value;
+        uint8_t value_len;
+
+        value = avrcp_subevent_now_playing_title_info_get_value(packet);
+        value_len = avrcp_subevent_now_playing_title_info_get_value_len(packet);
+        bt_avrcp_ct_store_meta_text(bt_avrcp_ct_title, sizeof(bt_avrcp_ct_title),
+                                    value, value_len);
+        bt_avrcp_ct_log_text("title", value, value_len);
         break;
+    }
 
     case AVRCP_SUBEVENT_NOW_PLAYING_ARTIST_INFO:  // 歌手/艺术家
-        bt_avrcp_ct_log_text("artist",
-                             avrcp_subevent_now_playing_artist_info_get_value(packet),
-                             avrcp_subevent_now_playing_artist_info_get_value_len(packet));
+    {
+        const uint8_t *value;
+        uint8_t value_len;
+
+        value = avrcp_subevent_now_playing_artist_info_get_value(packet);
+        value_len = avrcp_subevent_now_playing_artist_info_get_value_len(packet);
+        bt_avrcp_ct_store_meta_text(bt_avrcp_ct_artist, sizeof(bt_avrcp_ct_artist),
+                                    value, value_len);
+        bt_avrcp_ct_log_text("artist", value, value_len);
         break;
+    }
 
     case AVRCP_SUBEVENT_NOW_PLAYING_ALBUM_INFO:  // 专辑名称
         bt_avrcp_ct_log_text("album",

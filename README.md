@@ -1,566 +1,378 @@
 # Bluetooth Audio 当前架构说明
 
+> 更新时间：2026-07-27  
+> 主控：STM32F407VG + RT-Thread 4.1.1  
+> 蓝牙：外挂 ESP32-WROOM-32E（Controller）+ 工程内 `BT-STACK`（Host）  
+> 当前定位：**可工作的蓝牙音箱产品雏形**（A2DP 播放 + AVRCP 控制 + 播放页 GUI + 中文字库）
+
+本文只描述**已经在代码里落地**的架构与能力，不把“计划做”的事写成已完成。
+
+---
+
 ## 1. 目标与范围
 
-当前工程的目标是：
+### 1.1 已完成的主目标
 
-- STM32F407 作为主控运行 RT-Thread。
-- 外挂 ESP32-WROOM-32E 作为蓝牙 Controller，通过 HCI H4 UART 接入 Host。
-- Host 协议栈统一使用工程内置的 `BT-STACK`。
-- 当前主功能聚焦为 `Bluetooth Classic A2DP Sink`：
-  - 被手机 / PC 发现并连接
-  - 接收 SBC 音频
-  - 解码为 PCM
-  - 通过 `I2S2 + DMA + ES8311` 播放
-- 在本地按键触发后，切换到采集模式：
-  - 如果当前 A2DP media stream 仍在 active，先发起 `AVDTP suspend`
-  - 等流真正进入 inactive 后再切到采集
-  - 从 `ES8311 + I2S2 Rx` 采集 PCM
-  - 经 `uart3` 导出原始 PCM 数据
+- 被手机 / PC 发现并连接（Bluetooth Classic）
+- **A2DP Sink**：接收 SBC → 解码 PCM → `I2S2 + DMA + ES8311` 播放
+- **AVRCP Controller / Target**：
+  - 本地按键 / 编码器控制对端播放、暂停、切歌、音量
+  - 拉取 Now Playing（歌名 / 歌手 / 时长 / 进度）
+  - 绝对音量同步（支持时）
+- **LVGL 播放页 GUI**（320×240 横屏）
+  - Welcome 启动页 → Main 播放页
+  - 歌名 / 歌手中文显示、进度条、矢量旋转圆盘、状态文案
+- **板载 W25Q128**：SFUD + FAL 分区；`font` 分区存放 ZBFT 点阵字库
+- 开机提示音与 Welcome 淡出同步
 
-当前文档只描述已经接通并在代码里落地的架构，不讨论尚未接入的 AVRCP、HFP、BLE 业务、文件系统或更复杂的音频路由。
+### 1.2 明确未做 / 未产品化
 
-## 2. 当前真实总体分层
+| 项 | 状态 |
+|---|---|
+| HFP / HSP 通话 | 未接 |
+| BLE 业务 | 配置关闭 |
+| A2DP SBC fragmentation 重组 | 未实现（分片包直接丢） |
+| littlefs 挂载与业务读写 | 包已引入、分区已规划，业务未产品化 |
+| OTA（fw_a / fw_b） | 仅分区预留 |
+| 触摸屏播控 | 未做（播控走按键/编码器） |
+| SPI DMA 刷屏 | 未做（draw buf 在 CCM，DMA 不可见） |
+| AI 对话 / 香橙派联动 | **下一阶段**（本文档之后） |
+| 采集导出主业务 | `es8311` 仍有 CAPTURE 能力，`uart_send_pcm` 仍在，但 **main / control 已不再切采集** |
+
+---
+
+## 2. 总体分层
 
 ```text
 手机 / PC
-    |
-    |  Bluetooth Classic
-    |  A2DP / AVDTP / SDP
+    |  Classic: A2DP (SBC) + AVRCP
     v
-+--------------------------------------+
-| STM32F407 + RT-Thread                |
-|                                      |
-|  applications/                       |
-|    main.c                            |
-|    bt_app.c                          |
-|    bt_a2dp_sink_app.c                |
-|    bt_a2dp_audio.c                   |
-|    es8311_audio.c                    |
-|    key_app.c                         |
-|    uart_send_pcm.c                   |
-|                                      |
-|  mycomponents/BT-STACK/              |
-|    core/src/bt_host.c                |
-|    port/btstack_port.c               |
-|    port/btstack_run_loop_embedded.c  |
-|    port/btstack_uart_block_embedded.c|
-+--------------------------------------+
-    |
-    | HCI H4 UART (`uart2`)
++------------------------------------------------------------------+
+| STM32F407 + RT-Thread                                            |
+|                                                                  |
+|  applications/                                                   |
+|    main.c                 启动编排                               |
+|    bt_app.c               BT Host + profile 注册                 |
+|    bt_a2dp_sink_app.c     A2DP Sink 事件 / media 转发            |
+|    bt_a2dp_audio.c        RTP/SBC 解码 → PCM                     |
+|    bt_avrcp_ct_app.c      AVRCP CT/TG、元数据、音量              |
+|    es8311_audio.c         统一音频会话（播放 ring + I2S DMA）    |
+|    control_app.c          按键 + 旋转编码器 → AVRCP              |
+|    lcd_app / mylvgl_app   ST7789 + LVGL 显示端口                 |
+|    gui_manager / welcome / main   界面管理与播放页               |
+|    sfud_app / font_app / font_update   Flash / 字库              |
+|                                                                  |
+|  mycomponents/BT-STACK/   Host 栈 + RT-Thread port + ESP32 chipset|
+|  mycomponents/es8311/     Codec 寄存器驱动                       |
+|  mycomponents/LCD/        ST7789 面板驱动                        |
+|  mycomponents/keyboard/   按键状态机                             |
+|  packages/LVGL-v8.3.11    GUI                                    |
+|  packages/littlefs-v2.5.0 已引入，业务未挂载产品化               |
++------------------------------------------------------------------+
+    | HCI H4 UART (uart2, 921600, 流控)
     v
-+--------------------------------------+
-| ESP32-WROOM-32E                      |
-| Bluetooth Controller                 |
-+--------------------------------------+
+ESP32-WROOM-32E  (Bluetooth Controller)
     |
-    | SBC -> PCM -> I2S2 / DMA
-    v
-+--------------------------------------+
-| ES8311 Codec                         |
-| Playback / Capture Analog Frontend   |
-+--------------------------------------+
-    |
-    +--> 播放输出
-    |
-    +--> 采集 PCM -> uart3 导出
+    | 播放: SBC→PCM→I2S2/DMA→ES8311 DAC
+    | 显示: SPI1 → ST7789 + W25Q128（共总线，独立 CS）
 ```
 
-## 3. 启动链与构建入口
+---
 
-### 3.1 实际启动入口
+## 3. 启动链
 
-当前工程真正的启动入口不是 `cubemx/Src/main.c`，而是 RT-Thread 用户态入口：
+### 3.1 真正入口
 
-- `drivers/board.c`
-  - `rt_hw_board_init()`
-  - 在 `hw_board_init()` 之后继续执行 `rt_components_board_init()`
-- `drivers/drv_common.c`
-  - `hw_board_init()`
-  - 初始化时钟、SysTick、Pin、USART 等 BSP
-- `drivers/drv_clk.c`
-  - `clk_init()` 内部调用 CubeMX 生成的 `SystemClock_Config()`
-- `applications/main.c`
-  - 当前业务入口 `main()`
+- 用户态入口：`applications/main.c` 的 `main()`
+- `cubemx/Src/main.c` 的 `__WEAK main` 会被覆盖
+- CubeMX 主要提供：时钟、`hi2s2` 等句柄、MSP 初始化
 
-也就是说：
-
-- `cubemx/Src/main.c` 里的 `__WEAK int main(void)` 会被 `applications/main.c` 覆盖。
-- CubeMX 在当前工程里的主要作用是：
-  - 提供 `SystemClock_Config()`
-  - 提供 `hi2s2` 等 HAL 句柄定义
-  - 提供 `HAL_I2S_MspInit()` / `HAL_UART_MspInit()` 等底层 MSP 初始化
-
-### 3.2 应用启动顺序
-
-`applications/main.c` 当前启动顺序如下：
+### 3.2 应用启动顺序（与代码一致）
 
 ```text
 main()
-  -> es8311_audio_init()
-  -> bt__init()
-  -> key_app_init()
-  -> while (1) { rt_thread_mdelay(10); }
+  → sfud_app_init()              // W25Q128：GPIO/JEDEC/SFUD/清写保护
+  → es8311_audio_init()          // Codec + I2S 会话层
+  → boot_prompt_play_once()      // 同步阻塞提示音
+  → mylvgl_notify_boot_prompt_done()  // 通知 Welcome 可淡出
+  → bt__init()
+       → btstack_port_init()
+       → bt_a2dp_sink_service_init()
+       → bt_avrcp_ct_service_init()
+       → btstack_port_start_thread()
+  → control_app_init()           // 按键 + 编码器线程
+  → while (1) rt_thread_mdelay(10)
 ```
 
-这里的含义是：
+### 3.3 LVGL 启动（组件自动拉起，不在 main 里手写）
 
-- 先把统一音频会话层准备好
-- 再启动蓝牙 Host 和 A2DP Sink
-- 最后拉起按键线程，允许切换采集模式
+```text
+LVGL 线程
+  → lv_port_disp_init()          // lcd_app_init + draw buf + flush
+  → lv_user_gui_init()
+       → font_app_init()         // FAL "font" 分区，索引表进 RAM
+       → gui_manager_init()
+            → Welcome
+            → (提示音完成 + 打字动画结束) → Main 播放页
+```
 
-## 4. 当前模块职责
+---
 
-### 4.1 应用编排层
+## 4. 模块职责
+
+### 4.1 蓝牙
+
+| 文件 | 职责 |
+|---|---|
+| `bt_app.c` | Host 初始化编排；只注册 A2DP Sink + AVRCP |
+| `bt_a2dp_sink_app.c` | SEP / SDP / stream 事件；media 包交给解码层；suspend/resume 查询 |
+| `bt_a2dp_audio.c` | RTP + SBC 解码；写 `es8311_audio` 播放接口；满缓冲回压丢包 |
+| `bt_avrcp_ct_app.c` | CT 控制 + TG 侧绝对音量；Now Playing 缓存；状态机防重入 |
+
+AVRCP 对外只读接口（GUI 用）：
+
+- `bt_avrcp_ct_get_title()` / `get_artist()`
+- `bt_avrcp_ct_get_song_length_ms()` / `get_song_position_ms()`
+- `bt_avrcp_ct_get_link_state()` / `get_playback_state()`
+- `bt_avrcp_ct_is_absolute_volume_active()`
+
+控制接口：`play / pause / next / previous / volume_up / volume_down`。
+
+### 4.2 音频会话
+
+`es8311_audio.c` 是音频核心，不是单纯 codec 包装：
+
+- 模式：`IDLE` / `PLAYBACK` / `CAPTURE`（互斥）
+- 播放 ring、采集 ring 放在 **CCM**（CPU 可见，DMA 不可见）
+- I2S DMA 双缓冲必须在 **主 RAM**
+- 本地音量 0~127，与 AVRCP Absolute Volume 对齐
+- `boot_prompt_play_once()`：开机提示音
+
+### 4.3 本地控制
+
+`control_app.c` 取代旧的“按键切采集”主路径：
+
+| 输入 | 动作 |
+|---|---|
+| PC9 单击 | PLAYING→pause；否则 play |
+| PC9 双击 | next |
+| 编码器 PB6/PB7 | volume up / down（优先绝对音量） |
+
+### 4.4 显示与 GUI
+
+| 文件 | 职责 |
+|---|---|
+| `lcd_app.c` | ST7789，SPI1，CS=`PC4`，DC=`PE4`，RST=`PE5`，横屏 320×240，总线约 42 MHz |
+| `mylvgl_app.c` | LVGL disp port；draw buf **36 行** 放 CCM；flush 时 RGB565 字节交换 + `LCD_ShowPicture` |
+| `gui_manager.c` | Welcome ↔ Main 切换；转发 boot prompt 完成事件 |
+| `gui_welcome.c` | 打字机欢迎页，等提示音后淡出 |
+| `gui_main.c` | 播放页：矢量圆盘 + 歌名/歌手 + 进度/时间 + 状态；约 400 ms 刷新；圆盘约 24 s/圈 |
+
+### 4.5 Flash / 字库
+
+| 文件 | 职责 |
+|---|---|
+| `sfud_app.c` | 共总线 SPI 扫卡、JEDEC、SFUD probe、开机清 BP 写保护 |
+| `fal_cfg.h` | 分区表（见下） |
+| `font_app.c` | LVGL 自定义字体：索引表 RAM 缓存 + 单字 32B 点阵按需读 |
+| `font_update.c` | `font_update` / `font_info`：YMODEM 烧字库 + CRC 校验 |
+| `fontlib/` | PC 侧生成 `font.bin`、FontFlasher |
+
+FAL 分区（W25Q128 16MB）：
+
+```text
+font        0 ~ 2MB     汉字点阵（ZBFT），运行时直读
+fw_a        2 ~ 4MB     OTA 下载区（预留）
+fw_b        4 ~ 5MB     回退备份（预留）
+filesystem  5 ~ 16MB    littlefs 预留（业务未挂载产品化）
+```
+
+字库：SimHei 16×16 1bpp，ASCII + 全 GB2312，约 7540 字 / 250 KB。细节见 `fontlib/README.md` 与 `docs/lvgl_chinese_font_design.md`。
+
+---
+
+## 5. 硬件资源分工
+
+| 资源 | 用途 |
+|---|---|
+| `uart1` | 控制台 / msh / YMODEM 烧字库 |
+| `uart2` | 蓝牙 HCI H4（921600 + 流控）→ ESP32 |
+| `uart3` | 历史 PCM 导出（`uart_send_pcm`，当前未挂主业务） |
+| `i2c1`（软） | ES8311 控制，SCL=`PC11`，SDA=`PC12` |
+| `I2S2` + DMA | ES8311 数字音频（播放 / 全双工采集能力仍在） |
+| `SPI1` | **共总线**：ST7789 CS=`PC4` + W25Q128 CS=`PA4`；SCK/MISO/MOSI=`PA5/6/7` |
+| `PC9` | 按键 SW |
+| `PB6/PB7` | 旋转编码器 CLK/DT |
+| CCM 64KB | 播放 ring + 采集 ring + LVGL draw buf（**不可 DMA**） |
+
+---
+
+## 6. 数据流
+
+### 6.1 蓝牙播放
+
+```text
+手机
+  → A2DP media
+  → bt_a2dp_sink media handler
+  → bt_a2dp_audio_process_media_packet()
+       RTP/SBC 解析 → SBC decode
+  → es8311_audio_write_playback_checked()
+  → playback ring (CCM)
+  → 过启动阈值后 I2S TX DMA
+  → ES8311 DAC → 喇叭
+```
+
+### 6.2 控制与元数据
+
+```text
+按键/编码器
+  → control_app
+  → bt_avrcp_ct_play/pause/next/volume_*
+  → 对端手机播放器
+
+对端通知 / GetElementAttributes
+  → bt_avrcp_ct 缓存 title/artist/pos/len/playback
+  → gui_main 400ms timer 差分刷新 UI
+```
+
+### 6.3 显示刷新
+
+```text
+LVGL 脏区渲染 → CCM draw buf
+  → RGB565 swap（若未开 LV_COLOR_16_SWAP）
+  → LCD_ShowPicture（CPU SPI，无 DMA）
+  → ST7789
+```
+
+中文：`lv_label` UTF-8 → Unicode → `font_app` 二分索引 → FAL 读 32B 点阵。
+
+---
+
+## 7. 关键配置摘要
+
+### 7.1 蓝牙（`bt_config.h`）
+
+- 本地名：`WSOZ`
+- Classic 可发现 / 可连接
+- BLE 关闭
+- HCI：`uart2`，921600，流控开
+- AVDTP：1 connection / 1 SEP
+
+### 7.2 SBC 能力（常见组合）
+
+- 44.1 / 48 kHz；Stereo / Joint Stereo
+- block 4~16；subbands 4/8；Loudness/SNR；bitpool 2~53
+- 偏好：44.1 kHz + Joint Stereo + 16 blocks + 8 subbands + Loudness
+
+### 7.3 音频缓冲（`es8311_audio.c`）
+
+- DMA half：512 frames；DMA buffer：1024 frames
+- Playback ring：8192 frames（立体声，CCM）
+- Capture ring：4096 frames（单声道有效 slot，CCM）
+- 播放启动阈值：6144 frames
+- 默认采样率：44.1 kHz
+
+### 7.4 GUI / 总线
+
+- 逻辑分辨率：320×240（`LCD_ROTATION_90`）
+- LVGL draw buf：36 行 ≈ 23 KB CCM
+- LCD / Flash SPI 工作时钟目标：42 MHz（不稳可降回 30/20）
+- 圆盘动画：约 24 s/圈，36 步 × 10°，降低脏区刷新
+
+---
+
+## 8. 已完成能力清单
+
+- [x] RT-Thread + CubeMX 时钟 / 外设 MSP
+- [x] BT-STACK Host + ESP32 Controller HCI
+- [x] A2DP Sink 连接、SBC 解码、ES8311 播放
+- [x] AVRCP 播放/暂停/切歌/音量（相对 + 绝对）
+- [x] Now Playing 元数据缓存与 GUI 展示
+- [x] 按键 + 旋转编码器本地控制
+- [x] ST7789 + LVGL Welcome / 播放主界面
+- [x] W25Q128 SFUD 扫卡、写保护清除
+- [x] FAL 分区；ZBFT 中文字库运行时渲染
+- [x] YMODEM `font_update` / `font_info`
+- [x] 开机提示音与 Welcome 同步退出
+- [x] 进度条对“暂停再播瞬态 position=0”的防闪处理
+
+---
+
+## 9. 已知限制与坑
+
+1. **SBC fragmentation 未实现** — 部分源端可能卡顿/丢音  
+2. **播放与采集互斥** — 当前产品路径以播放为主  
+3. **SPI 无 DMA 刷屏** — 卡顿主要受 SPI 带宽与脏区影响；draw buf 在 CCM 无法直接 DMA  
+4. **LCD 与 Flash 共 SPI1** — 字库读与刷屏争用；探卡必须拉高 LCD CS  
+5. **W25Q 写保护** — 出厂/旧 OTA 可能 BP 全置位，擦写静默失败；`sfud_app_init` 已自动清  
+6. **个别手机元数据编码** — 按 UTF-8 显示；非 UTF-8 可能乱码/空白  
+7. **42 MHz SPI** — 布线差时可能花屏/字库偶发读坏，需降频  
+8. **littlefs / OTA** — 分区在，业务未接  
+9. **`uart_send_pcm` / 采集切模式** — 代码仍在，主路径已改为 AVRCP 音箱控制  
+
+字库度量注意：`base_line=0`、`ofs_y=0`，否则 16×16 全格点阵会被裁成“只剩上半”。
+
+---
+
+## 10. 常用调试命令
+
+| 命令 | 作用 |
+|---|---|
+| `sfud_app_info` / `sfud_app_jedec` / `sfud_app_hwcheck` | Flash 识别与硬件自检 |
+| `font_update` | YMODEM 接收 `font.bin` 到 `font` 分区 |
+| `font_info` | 字库头 + CRC 校验 |
+| `lcd_app_test` | ST7789 色条测试（会冲掉 LVGL 画面） |
+
+烧字库也可用 `fontlib/FontFlasher.exe`（需独占串口）。
+
+---
+
+## 11. 关键文件索引
+
+**应用层**
 
 - `applications/main.c`
-  - 负责整个应用级启动顺序
-  - 不承载具体协议和音频逻辑
+- `applications/bt_app.c` / `bt_a2dp_sink_app.*` / `bt_a2dp_audio.*` / `bt_avrcp_ct_app.*`
+- `applications/es8311_audio.*` / `control_app.*`
+- `applications/lcd_app.*` / `mylvgl_app.*`
+- `applications/gui_manager.*` / `gui_welcome.*` / `gui_main.*`
+- `applications/sfud_app.*` / `fal_cfg.h` / `font_app.*` / `font_update.c`
 
-- `applications/bt_app.c`
-  - 蓝牙应用总编排入口
-  - 负责按顺序完成：
-    - `btstack_port_init(NULL)`
-    - `bt_a2dp_sink_service_init()`
-    - `btstack_port_start_thread()`
-  - 当前只注册 A2DP Sink，不直接操作 PCM 缓冲
+**组件与包**
 
-### 4.2 BT-STACK 平台接入层
+- `mycomponents/BT-STACK/`（含 `bt_config.h`、port、ESP32 chipset）
+- `mycomponents/es8311/` / `LCD/` / `keyboard/`
+- `packages/LVGL-v8.3.11/` / `packages/littlefs-v2.5.0/`
 
-- `mycomponents/BT-STACK/core/src/bt_host.c`
-  - 对 BTstack 原生接口做一层工程内封装
-  - 负责：
-    - `hci_init()`
-    - `l2cap_init()`
-    - `sdp_init()`
-    - `rfcomm_init()`
-    - 应用本地设备名 / discoverable / connectable 配置
+**文档与工具**
 
-- `mycomponents/BT-STACK/port/btstack_port.c`
-  - RT-Thread 端口主入口
-  - 负责：
-    - 初始化 run loop
-    - 初始化 TLV
-    - 绑定 UART H4 传输层
-    - 绑定 ESP32 chipset driver
-    - 创建 `btstack` 专用线程
-    - 在 run loop 线程上下文里投递 `bt_host_start()` 完成控制器上电
+- `fontlib/README.md` — 字库生成与烧录
+- `docs/lvgl_chinese_font_design.md` — 中文字库设计说明
+- `drivers/board.c` / `drv_*.c` / `cubemx/` — BSP 与 Cube 工程
 
-- `mycomponents/BT-STACK/port/btstack_run_loop_embedded.c`
-  - BTstack 在 RT-Thread 下的事件循环实现
-  - 通过信号量唤醒 run loop
+---
 
-- `mycomponents/BT-STACK/port/btstack_uart_block_embedded.c`
-  - BTstack 到 RT-Thread UART 设备的 H4 适配层
-  - 当前默认使用：
-    - 设备名：`uart2`
-    - 波特率：`921600`
-    - 硬件流控：开启
-  - 内部有：
-    - RX ring buffer
-    - 一个专用 UART RX 线程
-    - 从中断回调转发到 BTstack run loop 的上下文切换
+## 12. 后续方向（音箱之后）
 
-- `mycomponents/BT-STACK/port/btstack_chipset_esp32.c`
-  - ESP32 Controller 的 chipset 适配层
-  - 负责把当前外挂控制器接入 BTstack 的 chipset 抽象
+音箱主链路可视为 **MVP 已闭环**。建议优先级：
 
-### 4.3 A2DP 服务层
+1. **下一阶段：AI 对话 + 香橙派**（用户规划中）  
+   - 需先定：链路形态（UART/SPI/网络）、音频谁采谁播、唤醒/全双工策略、与 A2DP 互斥还是可打断  
+2. 补 SBC fragmentation，提升多机型稳定性  
+3. littlefs 真正挂载（配置 / 日志 / 资源）  
+4. 若要更顺滑 GUI：主 RAM 双 draw buf + SPI DMA，或 LCD/Flash 分总线  
+5. OTA 与 fw_a/fw_b 落地  
+6. 需要时再开 HFP / BLE
 
-- `applications/bt_a2dp_sink_app.c`
-  - 注册 A2DP Sink 服务
-  - 创建本地 SBC Sink SEP
-  - 注册 SDP 记录
-  - 处理 A2DP META 事件：
-    - signaling connection established / released
-    - SBC configuration
-    - stream established / started / suspended / stopped / released
-    - command accepted / rejected
-  - 在 `STREAM_STARTED` 时确保本地播放链路已经 arm
-  - 对上层提供 media stream suspend 请求与状态查询
-  - 收到媒体包后，把包转交给 `bt_a2dp_audio_process_media_packet()`
-
-### 4.4 A2DP 解码层
-
-- `applications/bt_a2dp_audio.c`
-  - 负责 RTP 头解析
-  - 负责 SBC 载荷解析
-  - 负责调用 BTstack 自带 SBC decoder 解码为 PCM
-  - 解码后的 PCM 直接写入 `es8311_audio` 提供的统一播放接口
-
-当前这层的几个重要约束：
-
-- 只处理最常见的非分片 SBC 包
-- 尚未实现 SBC fragmentation 重组
-- 如果远端发送分片包，当前直接丢弃
-- 当播放缓冲达到回压阈值时，会主动丢弃媒体包避免进一步堆积
-
-### 4.5 统一音频会话层
-
-- `applications/es8311_audio.c`
-  - 这是当前音频主链路的核心
-  - 统一管理：
-    - 播放模式
-    - 采集模式
-    - `I2S2 + DMA`
-    - 播放 / 采集 ring buffer
-    - ES8311 状态切换
-    - DMA half/full 回调
-
-它不是单纯 codec 驱动包装，而是一个“音频会话层”：
-
-- 上层播放只管写 PCM：
-  - `es8311_audio_write_playback_checked()`
-- 上层采集只管读 PCM：
-  - `es8311_audio_read_capture()`
-
-当前 run mode 定义为：
-
-- `IDLE`
-- `PLAYBACK`
-- `CAPTURE`
-
-播放与采集当前是互斥关系：
-
-- 进入 `CAPTURE` 前会停掉播放
-- 回到 `PLAYBACK` 前会停掉采集
-
-### 4.6 Codec 控制层
-
-- `mycomponents/es8311/es8311_driver.c`
-- `mycomponents/es8311/es8311_driver.h`
-
-职责：
-
-- 通过 `i2c1` 访问 ES8311 寄存器
-- 初始化 codec
-- 配置采样率 / word length / I2S 格式
-- 启停播放路径
-- 启停录音路径
-- 配置模拟 MIC PGA 增益
-
-当前这层只放开已经核实过的采样率：
-
-- `44.1 kHz`
-- `48 kHz`
-
-### 4.7 按键与采集导出层
-
-- `applications/key_app.c`
-  - 使用 `mycomponents/keyboard`
-  - 轮询 `PC9`
-  - 当前业务动作是：
-    - `PC9` 双击
-    - 在播放模式和采集模式之间切换
-    - 从播放切到采集前，先请求挂起当前 A2DP media stream
-    - 只有等流真正 inactive 后，才切到 `CAPTURE`
-
-- `applications/uart_send_pcm.c`
-  - 在采集模式下创建独立线程
-  - 从 `es8311_audio_read_capture()` 读取 PCM
-  - 原样写到 `uart3`
-  - 当前导出配置：
-    - 设备名：`uart3`
-    - 波特率：`2000000`
-
-## 5. 当前硬件资源分工
-
-当前板级资源在代码里的分工如下：
-
-- `uart1`
-  - RT-Thread 控制台
-
-- `uart2`
-  - 蓝牙 HCI H4 链路
-  - 连接外挂 ESP32 Controller
-
-- `uart3`
-  - 采集 PCM 导出
-
-- `i2c1`
-  - ES8311 控制面
-  - 软件 I2C，SCL=`PC11`，SDA=`PC12`
-
-- `I2S2`
-  - ES8311 数字音频接口
-  - 既承担播放，也承担采集
-
-- `PC9`
-  - 本地按键输入
-  - 当前用于双击切换采集模式
-
-## 6. 启动流程
-
-当前启动流程如下：
-
-```text
-RT-Thread startup
-  -> rt_hw_board_init()
-      -> hw_board_init()
-          -> clk_init()
-              -> SystemClock_Config()
-          -> rt_hw_pin_init()
-          -> rt_hw_usart_init()
-      -> rt_components_board_init()
-          -> rt_hw_i2c_init()
-  -> applications/main.c : main()
-      -> es8311_audio_init()
-          -> es8311_init()
-          -> es8311_audio_i2s_reconfigure(44100)
-      -> bt__init()
-          -> btstack_port_init()
-              -> bt_host_stack_init()
-              -> bt_host_protocol_init()
-              -> bt_host_apply_device_config()
-          -> bt_a2dp_sink_service_init()
-              -> bt_a2dp_audio_init()
-              -> a2dp_sink_init()
-              -> 创建 SBC Sink SEP
-              -> 注册 SDP record
-          -> btstack_port_start_thread()
-              -> 创建 btstack 线程
-              -> btstack_run_loop_execute()
-              -> bt_host_start()
-                  -> HCI_POWER_ON
-      -> key_app_init()
-          -> 创建 key_app 轮询线程
-```
-
-当 `BTSTACK_EVENT_STATE == HCI_STATE_WORKING` 时，说明：
-
-- Host 栈已经起来
-- Controller 已上电
-- 本机可以被远端发现并连接
-
-## 7. 数据流
-
-### 7.1 蓝牙播放链
-
-```text
-手机 / PC
-  -> A2DP media packet
-  -> bt_app_a2dp_sink_media_handler()
-  -> bt_a2dp_audio_process_media_packet()
-      -> RTP/SBC 解析
-      -> SBC decoder
-      -> es8311_audio_write_playback_checked()
-  -> playback ring buffer
-  -> 达到启动阈值后启动 HAL_I2S_Transmit_DMA()
-  -> DMA half/full callback 持续补 TX buffer
-  -> I2S2
-  -> ES8311 playback path
-  -> 模拟输出
-```
-
-### 7.2 本地采集链
-
-```text
-PC9 双击
-  -> key_app_toggle_capture()
-  -> key_app_start_capture()
-      -> 若当前 A2DP stream active:
-          -> bt_a2dp_sink_request_media_suspend()
-          -> 等待 A2DP stream inactive
-      -> key_app_start_capture_now()
-          -> es8311_audio_set_run_mode(CAPTURE)
-          -> es8311_audio_start_capture()
-              -> HAL_I2SEx_TransmitReceive_DMA()
-              -> es8311_start_record()
-  -> DMA half/full callback
-      -> 从 I2S Rx buffer 提取一个有效 slot
-      -> 写入 capture ring buffer
-  -> uart_send_pcm 线程
-      -> es8311_audio_read_capture()
-      -> rt_device_write(uart3)
-```
-
-### 7.3 采集 slot 处理说明
-
-当前采集不是直接输出双声道，而是：
-
-- 先读取 I2S Rx 的左右 slot
-- 统计每个 slot 的：
-  - `min`
-  - `max`
-  - `saturated`
-  - `zero`
-- 自动挑选一个相对有效的 slot
-- 锁定该 slot
-- 最终输出单声道 PCM
-
-这说明当前采集链路更偏向“稳定拿到一条可用音频”，而不是完整双声道录音。
-
-## 8. 当前关键配置
-
-### 8.1 蓝牙配置
-
-当前 `bt_config.h` 里的有效策略为：
-
-- `BT_CFG_ENABLE_CLASSIC = 1`
-- `BT_CFG_ENABLE_BLE = 0`
-- `BT_CFG_LOCAL_NAME = "WSOZ"`
-- `BT_CFG_UART_DEVICE_NAME = "uart2"`
-- `BT_CFG_UART_BAUDRATE_INIT = 921600`
-- `BT_CFG_UART_FLOWCONTROL = ON`
-- `BT_CFG_CLASSIC_DISCOVERABLE = 1`
-- `BT_CFG_CLASSIC_CONNECTABLE = 1`
-- `BT_CFG_MAX_NR_AVDTP_STREAM_ENDPOINTS = 1`
-- `BT_CFG_MAX_NR_AVDTP_CONNECTIONS = 1`
-
-### 8.2 A2DP / SBC 能力
-
-当前本机对外声明的 SBC 能力偏向最常见组合：
-
-- 采样率：44.1 kHz / 48 kHz
-- 通道：Stereo / Joint Stereo
-- Block length：4 / 8 / 12 / 16
-- Subbands：4 / 8
-- Allocation：Loudness / SNR
-- Bitpool：2 ~ 53
-
-当前默认偏好配置是：
-
-- 44.1 kHz
-- Joint Stereo
-- 16 blocks
-- 8 subbands
-- Loudness
-- bitpool `2 ~ 53`
-
-### 8.3 `es8311_audio.c` 播放 / 采集侧关键参数
-
-当前统一音频会话层的关键参数如下：
-
-- `ES8311_AUDIO_DMA_HALF_FRAMES = 512`
-- `ES8311_AUDIO_DMA_BUFFER_FRAMES = 1024`
-- `ES8311_AUDIO_PLAYBACK_BUFFER_FRAMES = 8192`
-- `ES8311_AUDIO_CAPTURE_BUFFER_FRAMES = 4096`
-- `ES8311_AUDIO_PLAYBACK_START_THRESHOLD_FRAMES = 6144`
-- 播放输出通道数：`2`
-- 采集输出通道数：`1`
-
-这些参数的目标是：
-
-- 播放优先保证连续性
-- 采集优先保证“能稳定拿到数据”
-
-### 8.4 I2S / ES8311 侧
-
-当前 I2S / codec 关键约束如下：
-
-- `I2S2`
-- `I2S_MODE_MASTER_TX`
-- `I2S_FULLDUPLEXMODE_ENABLE`
-- `I2S_STANDARD_PHILIPS`
-- `I2S_DATAFORMAT_16B`
-- `MCLKOutput = ENABLE`
-
-ES8311 当前默认配置特征：
-
-- 默认采样率：`44.1 kHz`
-- 默认 `bits_per_sample = 16`
-- 默认 `use_mclk = 1`
-- 默认 `dac_source = LEFT`
-
-这里有一个很重要的现实约束：
-
-- ES8311 当前是按“单 DAC source 选一路 slot”在工作
-- 上层并没有做更复杂的立体声 downmix / 路由抽象
-
-## 9. 当前已经完成的能力
-
-当前工程已经完成并打通的能力：
-
-- RT-Thread 启动链与 BSP 正常工作
-- `uart1 / uart2 / uart3 / i2c1 / I2S2` 已按当前业务接入
-- BT-STACK Host 在 RT-Thread 下正常运行
-- 外挂 ESP32 Controller 能正常上电并配合 Host 工作
-- 本机可作为 A2DP Sink 被手机 / PC 发现
-- 可建立 A2DP 连接并协商 SBC 参数
-- 可接收 SBC 媒体包并解码为 PCM
-- 可通过 `I2S2 + DMA + ES8311` 播放音频
-- 按键切换到采集前，会先挂起当前 A2DP media stream，避免继续收包后在本地丢弃
-- 可通过本地按键切换到采集模式
-- 可把采集 PCM 经 `uart3` 导出
-
-## 10. 当前已知限制
-
-当前架构不是“全功能蓝牙音频系统”，而是“以 A2DP 播放为主、附带基础采集导出的可工作版本”。已知限制如下：
-
-- 只实现了 A2DP Sink 主链路
-- BLE 业务当前关闭，虽然底层封装预留了接口
-- 没有接 AVRCP 控制层
-- 当前按键切采集依赖 `AVDTP suspend`，不是 AVRCP 的播放/暂停控制
-- 没有接 HFP / HSP
-- `bt_a2dp_audio.c` 尚未实现 SBC fragmentation 重组
-- 播放与采集当前是互斥关系，不能并行
-- 采集输出当前是单声道，不是完整双声道
-- 采集链路当前只是“选一个有效 slot 输出”，没有更完整的声道抽象
-- ES8311 当前默认只使用单一 DAC source，没有更高层播放路由策略
-- 没有做更完整的静音 / standby / 自动省电策略
-
-其中最值得优先继续完善的一点仍然是：
-
-- `A2DP SBC fragmentation` 处理
-
-因为这会直接影响不同手机 / PC 组合下的播放连续性。
-
-## 11. 后续推荐扩展方向
-
-推荐按这个顺序往下做：
-
-1. 补齐 `A2DP SBC fragmentation` 重组
-2. 继续稳定 `SBC -> PCM -> playback ring -> DMA` 的连续性
-3. 梳理 ES8311 的播放 / 录音静音与 standby 状态机
-4. 把采集链路补成更明确的导出协议或至少补齐格式说明
-5. 如果确实需要录音质量，再决定是否做双声道采集或更明确的 slot 选择策略
-6. 加 AVRCP，至少先接播放 / 暂停 / 音量同步
-7. 如果后续真的需要 BLE，再把 BLE 初始化和业务配置接回当前架构
-
-## 12. 关键文件索引
-
-应用层：
-
-- `applications/main.c`
-- `applications/bt_app.c`
-- `applications/bt_a2dp_sink_app.c`
-- `applications/bt_a2dp_audio.c`
-- `applications/es8311_audio.c`
-- `applications/key_app.c`
-- `applications/uart_send_pcm.c`
-
-BT-STACK 封装与端口层：
-
-- `mycomponents/BT-STACK/core/src/bt_host.c`
-- `mycomponents/BT-STACK/core/config/bt_config.h`
-- `mycomponents/BT-STACK/port/btstack_port.c`
-- `mycomponents/BT-STACK/port/btstack_run_loop_embedded.c`
-- `mycomponents/BT-STACK/port/btstack_uart_block_embedded.c`
-- `mycomponents/BT-STACK/port/btstack_chipset_esp32.c`
-
-Codec 与输入组件：
-
-- `mycomponents/es8311/es8311_driver.c`
-- `mycomponents/es8311/es8311_driver.h`
-- `mycomponents/keyboard/inc/keyboard_driver.h`
-- `mycomponents/keyboard/src/keyboard_driver.c`
-
-BSP 与时钟 / 外设初始化：
-
-- `drivers/board.c`
-- `drivers/board.h`
-- `drivers/drv_common.c`
-- `drivers/drv_clk.c`
-- `drivers/drv_usart.c`
-- `drivers/drv_soft_i2c.c`
-- `cubemx/Src/main.c`
-- `cubemx/Src/stm32f4xx_hal_msp.c`
+---
 
 ## 13. 一句话总结
 
-当前工程已经形成两条真实可工作的链路：
+当前工程已是一条可演示的 **Classic 蓝牙音箱主链**：
 
-- `BT-STACK Host -> A2DP Sink -> SBC 解码 -> ES8311 音频会话层 -> I2S2 DMA -> ES8311 播放`
-- `PC9 双击 -> CAPTURE mode -> I2S2 Rx DMA -> 单声道 PCM -> uart3 导出`
+`手机 → ESP32 Controller → BT-STACK A2DP/AVRCP → SBC 解码 → ES8311 播放`  
++ `按键/编码器本地控播`  
++ `LVGL 播放页 + W25Q 中文字库`
 
-后续工作重点不再是“把链路接通”，而是继续做一致性、稳定性和文档收敛。
+下一阶段重心转向 **香橙派 AI 对话接入**，而不是继续堆音箱展示功能。

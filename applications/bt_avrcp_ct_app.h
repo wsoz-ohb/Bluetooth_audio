@@ -50,4 +50,11 @@ rt_err_t bt_avrcp_ct_volume_down(void);
 /* 对端是否已启用绝对音量（由 SetAbsoluteVolume / VOLUME_CHANGED 推断）。 */
 rt_bool_t bt_avrcp_ct_is_absolute_volume_active(void);
 
+/* Now Playing 元数据只读接口（供 GUI 刷新）。
+ * title/artist 可能为空串；断开或切歌瞬间会被清空。 */
+const char *bt_avrcp_ct_get_title(void);
+const char *bt_avrcp_ct_get_artist(void);
+uint32_t bt_avrcp_ct_get_song_length_ms(void);
+uint32_t bt_avrcp_ct_get_song_position_ms(void);
+
 #endif /* APPLICATIONS_BT_AVRCP_CT_APP_H_ */

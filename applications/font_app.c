@@ -33,9 +33,16 @@
 #define FONT_GLYPH_H            16
 #define FONT_LINE_HEIGHT        16
 #define FONT_BPP                1
-/* 基线在底部上方 4px(典型 16px 字体),边界框顶比基线高 12px */
-#define FONT_BASE_LINE          4
-#define FONT_OFS_Y              (-12)
+/*
+ * LVGL 绘制公式(lv_draw_sw_letter.c):
+ *   gpos.y = pos.y + (line_height - base_line) - box_h - ofs_y
+ * 我们的 16x16 点阵铺满整行,必须让 gpos.y == pos.y,否则字形下移,
+ * Label 再按 line_height 裁剪,就会"只剩上半截"。
+ * 正确组合: line_height=16, base_line=0, box_h=16, ofs_y=0
+ *   → gpos.y = pos.y + (16-0) - 16 - 0 = pos.y
+ */
+#define FONT_BASE_LINE          0
+#define FONT_OFS_Y              0
 
 /* 字库最大字数上限,防头部损坏时乱 malloc */
 #define FONT_GLYPH_CNT_LIMIT    20000u

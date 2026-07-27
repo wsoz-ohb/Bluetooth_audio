@@ -46,10 +46,11 @@
 /*
  * 【扫卡关键点】时钟策略
  * PROBE 1MHz : 识别阶段稳，共总线/飞线时显著降低 JEDEC=00 00 00 概率
- * WORK  20MHz: SFUD 成功后再提速做正常读写
+ * WORK  42MHz: SFUD 成功后再提速; W25Q 常温可读到 50MHz+,与 LCD 共总线时
+ *              若中文/字库偶发读坏再降回 30 或 20。
  */
 #define SFUD_SPI_PROBE_HZ       (1 * 1000 * 1000)
-#define SFUD_SPI_WORK_HZ        (20 * 1000 * 1000)
+#define SFUD_SPI_WORK_HZ        (42 * 1000 * 1000)
 
 #define SFUD_CMD_JEDEC_ID       0x9F
 

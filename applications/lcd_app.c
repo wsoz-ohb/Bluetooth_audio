@@ -24,7 +24,9 @@
 
 #define LCD_SPI_BUS_NAME        "spi1"
 #define LCD_SPI_DEVICE_NAME     "st7789"
-#define LCD_SPI_MAX_HZ          (20 * 1000 * 1000)
+/* ST7789 多数板可到 40~50MHz; SPI1 在 APB2 上,驱动会按分频取最接近值。
+ * 若花屏/雪花再降回 30 或 20。与 Flash 共总线,各自 rt_spi_configure 独立。 */
+#define LCD_SPI_MAX_HZ          (42 * 1000 * 1000)
 
 /* LCD CS 改到 PC4，给 SPI Flash 让出 PA4/PA6。 */
 #define LCD_CS_GPIOX            GPIOC

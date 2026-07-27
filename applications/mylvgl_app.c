@@ -20,7 +20,14 @@
 #define DBG_LVL DBG_WARNING
 #include <rtdbg.h>
 
-#define MYLVGL_DRAW_BUF_LINES  20
+/*
+ * draw buf 行数权衡(CCM 64KB):
+ *   音频 playback 32KB + capture 8KB 已占 40KB,
+ *   剩余约 24KB 给 LVGL。36 行 × 320 × 2B ≈ 23KB,还留一点余量。
+ *   再往上(40 行≈25.6KB)会把 CCM 顶穿链接失败。
+ * 行数越大,单次 dirty flush 次数越少,全屏/大面积更新更顺。
+ */
+#define MYLVGL_DRAW_BUF_LINES  36
 
 static lv_disp_draw_buf_t s_draw_buf;
 /* LCD 刷屏是 LCD_ShowPicture 纯 CPU 搬运(无 DMA),绘制缓冲放 CCM RAM */
