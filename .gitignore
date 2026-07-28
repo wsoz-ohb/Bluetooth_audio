@@ -36,3 +36,4 @@ RTE/
 settings/
 *.uvguix*
 .claude/
+tools/pulled/

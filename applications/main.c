@@ -17,12 +17,19 @@
 #include <control_app.h>
 #include "gui_manager.h"
 #include "sfud_app.h"
+#include "fs_app.h"
 
 int main(void)
 {
     if (sfud_app_init() != RT_EOK)
     {
         LOG_E("sfud_app_init failed");
+    }
+
+    /* Flash 就绪后挂 littlefs；失败不阻断音箱主链，只是 PTT 无法落盘 */
+    if (fs_app_init() != RT_EOK)
+    {
+        LOG_E("fs_app_init failed (PTT file record disabled)");
     }
 
     if (es8311_audio_init() != RT_EOK)

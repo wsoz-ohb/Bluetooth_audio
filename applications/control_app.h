@@ -14,6 +14,9 @@ extern "C" {
 
 rt_err_t control_app_init(void);
 
+/* PTT 长按采集是否正在进行（供 GUI 状态栏等只读查询）。 */
+rt_bool_t control_app_is_capturing(void);
+
 #if defined(__cplusplus)
 }
 #endif

@@ -135,6 +135,8 @@
 /* Utilities */
 
 #define RT_USING_RYM
+/* 打开后才会编译 ry_sy.c，msh 才有 sy/ry 文件传输命令 */
+#define YMODEM_USING_FILE_TRANSFER
 
 /* end of Utilities */
 /* end of RT-Thread Components */

@@ -10,6 +10,7 @@
 #include "gui_main.h"
 #include "bt_avrcp_ct_app.h"
 #include "bt_a2dp_sink_app.h"
+#include "control_app.h"
 #include "font_app.h"
 
 #include <rtthread.h>
@@ -209,6 +210,12 @@ static void gui_main_set_label_if_changed(lv_obj_t *label,
 static const char *gui_main_status_text(bt_avrcp_ct_link_state_t link_state,
                                         bt_avrcp_ct_playback_state_t playback_state)
 {
+    /* PTT 长按采集优先显示 */
+    if (control_app_is_capturing())
+    {
+        return "正在说话...";
+    }
+
     if (link_state != BT_AVRCP_CT_LINK_STATE_CONNECTED)
     {
         return "未连接蓝牙";
