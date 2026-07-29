@@ -136,6 +136,7 @@ static rt_err_t control_ptt_start(void)
 {
     bt_avrcp_ct_playback_state_t pb;
     rt_bool_t was_playing;
+    rt_bool_t pcm_export_started;
     rt_err_t err;
 
     if (g_ptt_capturing)
@@ -197,11 +198,13 @@ static rt_err_t control_ptt_start(void)
     }
 
     (void)es8311_set_mic_gain(CONTROL_PTT_MIC_GAIN);
+    es8311_audio_flush_capture();
 
-    err = es8311_audio_set_run_mode(ES8311_AUDIO_RUN_MODE_CAPTURE);
+    pcm_export_started = RT_FALSE;
+    err = uart_send_pcm_start();
     if (err != RT_EOK)
     {
-        LOG_E("PTT: enter capture failed: %d", err);
+        LOG_E("PTT: pcm export prepare failed: %d", err);
         if (g_ptt_media_gate_closed)
         {
             (void)bt_a2dp_sink_set_local_media_enabled(RT_TRUE);
@@ -214,10 +217,44 @@ static rt_err_t control_ptt_start(void)
         }
         return err;
     }
+    pcm_export_started = RT_TRUE;
 
-    if (uart_send_pcm_start() != RT_EOK)
+    if (!g_ptt_want_hold)
     {
-        LOG_W("PTT: uart_send_pcm_start failed, capture still runs locally");
+        LOG_I("PTT: released during pcm export prepare, abort start");
+        uart_send_pcm_stop();
+        if (g_ptt_media_gate_closed)
+        {
+            (void)bt_a2dp_sink_set_local_media_enabled(RT_TRUE);
+            g_ptt_media_gate_closed = RT_FALSE;
+        }
+        if (g_ptt_resume_play)
+        {
+            (void)bt_avrcp_ct_play();
+            g_ptt_resume_play = RT_FALSE;
+        }
+        return RT_EOK;
+    }
+
+    err = es8311_audio_set_run_mode(ES8311_AUDIO_RUN_MODE_CAPTURE);
+    if (err != RT_EOK)
+    {
+        LOG_E("PTT: enter capture failed: %d", err);
+        if (pcm_export_started)
+        {
+            uart_send_pcm_stop();
+        }
+        if (g_ptt_media_gate_closed)
+        {
+            (void)bt_a2dp_sink_set_local_media_enabled(RT_TRUE);
+            g_ptt_media_gate_closed = RT_FALSE;
+        }
+        if (g_ptt_resume_play)
+        {
+            (void)bt_avrcp_ct_play();
+            g_ptt_resume_play = RT_FALSE;
+        }
+        return err;
     }
 
     g_ptt_capturing = RT_TRUE;
@@ -242,8 +279,8 @@ static void control_ptt_stop(void)
     g_ptt_resume_play = RT_FALSE;
     g_ptt_capturing = RT_FALSE;
 
-    uart_send_pcm_stop();
     es8311_audio_stop_capture();
+    uart_send_pcm_stop();
     es8311_audio_flush_capture();
 
     /* 回到 idle,等对端 play / STREAM_STARTED 再 arm 播放 */

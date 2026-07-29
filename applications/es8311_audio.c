@@ -23,7 +23,7 @@
 #define ES8311_AUDIO_DMA_RX_SAMPLES                  (ES8311_AUDIO_DMA_BUFFER_FRAMES * ES8311_AUDIO_PLAYBACK_OUTPUT_CHANNELS)
 #define ES8311_AUDIO_PLAYBACK_BUFFER_FRAMES          8192u
 #define ES8311_AUDIO_PLAYBACK_BUFFER_SAMPLES         (ES8311_AUDIO_PLAYBACK_BUFFER_FRAMES * ES8311_AUDIO_PLAYBACK_OUTPUT_CHANNELS)
-#define ES8311_AUDIO_CAPTURE_BUFFER_FRAMES           4096u
+#define ES8311_AUDIO_CAPTURE_BUFFER_FRAMES           12288u
 #define ES8311_AUDIO_CAPTURE_BUFFER_SAMPLES          (ES8311_AUDIO_CAPTURE_BUFFER_FRAMES * ES8311_AUDIO_CAPTURE_OUTPUT_CHANNELS)
 #define ES8311_AUDIO_PLAYBACK_START_THRESHOLD_FRAMES (ES8311_AUDIO_DMA_BUFFER_FRAMES * 6u)
 
@@ -80,12 +80,11 @@ static es8311_audio_context_t es8311_audio_ctx;
 /* dma_tx/rx 是 I2S DMA 直接搬运的缓冲,必须留在主 RAM(CCM 对 DMA 不可见) */
 static rt_uint16_t es8311_audio_dma_tx_buffer[ES8311_AUDIO_DMA_TX_SAMPLES];
 static rt_uint16_t es8311_audio_dma_rx_buffer[ES8311_AUDIO_DMA_RX_SAMPLES];
-/* 环形缓冲只有 CPU 读写(写:蓝牙线程,读:DMA 半传输中断里 memcpy 到 dma_tx),
- * 放 CCM RAM(64KB, 0x10000000)给主 RAM 的堆腾空间 */
+/* 播放环形缓冲只有 CPU 读写，放 CCM RAM 给主 RAM 的堆腾空间。
+ * 采集环形缓冲要扛住 littlefs/串口短时阻塞，放主 SRAM 并适当加大。 */
 static rt_int16_t es8311_audio_playback_buffer[ES8311_AUDIO_PLAYBACK_BUFFER_SAMPLES]
     __attribute__((section(".ccmbss.es8311_playback")));
-static rt_int16_t es8311_audio_capture_buffer[ES8311_AUDIO_CAPTURE_BUFFER_SAMPLES]
-    __attribute__((section(".ccmbss.es8311_capture")));
+static rt_int16_t es8311_audio_capture_buffer[ES8311_AUDIO_CAPTURE_BUFFER_SAMPLES];
 
 typedef struct
 {
@@ -1310,9 +1309,9 @@ void es8311_audio_stop_capture(void)
 
     level = rt_hw_interrupt_disable();
     es8311_audio_ctx.capture_running = RT_FALSE;
-    es8311_audio_reset_capture_ring_locked();
     rt_hw_interrupt_enable(level);
 
+    /* stop 只停硬件采集，ring 留给导出线程收尾；flush_capture 才清缓存/统计。 */
     (void) es8311_stop_record();
     if ((es8311_audio_ctx.dma_mode == ES8311_AUDIO_DMA_MODE_DUPLEX) &&
         !es8311_audio_ctx.playback_running)

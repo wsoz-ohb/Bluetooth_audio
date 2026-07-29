@@ -22,8 +22,8 @@
 
 /*
  * draw buf 行数权衡(CCM 64KB):
- *   音频 playback 32KB + capture 8KB 已占 40KB,
- *   剩余约 24KB 给 LVGL。36 行 × 320 × 2B ≈ 23KB,还留一点余量。
+ *   音频 playback 32KB 在 CCM，采集缓冲放主 SRAM。
+ *   CCM 剩余约 32KB 给 LVGL。36 行 × 320 × 2B ≈ 23KB,还留一点余量。
  *   再往上(40 行≈25.6KB)会把 CCM 顶穿链接失败。
  * 行数越大,单次 dirty flush 次数越少,全屏/大面积更新更顺。
  */

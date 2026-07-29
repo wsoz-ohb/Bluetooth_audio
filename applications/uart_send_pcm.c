@@ -4,8 +4,8 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * PTT 采集 PCM 出口:
- * 1) uart3  @ 2Mbps  -> 香橙派（原始 int16le mono 流，无 WAV 头）
- * 2) 文件系统 /pcm/last.pcm     -> 本地复查（同格式）
+ * 1) uart3  @ 2Mbps  -> 香橙派（int16le mono 流，无 WAV 头）
+ * 2) 文件系统 /pcm/last.pcm     -> 本地复查（同格式，可按宏临时打开）
  *
  * 调试串口 uart1 只打摘要日志，不刷原始 PCM。
  */
@@ -25,10 +25,32 @@
 
 #define UART_SEND_PCM_DEVICE_NAME       "uart3"
 #define UART_SEND_PCM_BAUD_RATE         BAUD_RATE_2000000
-#define UART_SEND_PCM_THREAD_STACK_SIZE 2048
-#define UART_SEND_PCM_THREAD_PRIORITY   20
+#define UART_SEND_PCM_THREAD_STACK_SIZE 4096
+#define UART_SEND_PCM_THREAD_PRIORITY   14
 #define UART_SEND_PCM_THREAD_TICK       10
-#define UART_SEND_PCM_READ_FRAMES       256u
+#define UART_SEND_PCM_READ_FRAMES       1024u
+#define UART_SEND_PCM_START_WAIT_MS     3000u
+#define UART_SEND_PCM_STOP_WAIT_MS      3000u
+#define UART_SEND_PCM_UART_BACKLOG_LIMIT_FRAMES  1024u
+#define UART_SEND_PCM_UART_EXPORT_ENABLE 1
+#define UART_SEND_PCM_FILE_RECORD_ENABLE 0
+#define UART_SEND_PCM_FILE_CACHE_BYTES  4096u
+
+/*
+ * 轻量语音优化放在导出线程里做，避免在 I2S DMA 中断里增加计算量。
+ * 当前参数偏向近讲/语音验证：去低频漂移、压掉高频噪声、补一点数字增益并限幅。
+ */
+#define UART_SEND_PCM_VOICE_PROCESS_ENABLE 1
+#define UART_SEND_PCM_HIGHPASS_A_Q15       32212   /* ~120Hz @44.1kHz */
+#define UART_SEND_PCM_LOWPASS_ALPHA_Q15    19800   /* ~6.5kHz @44.1kHz */
+#define UART_SEND_PCM_GAIN_Q8              288u    /* ~+1.0dB */
+#define UART_SEND_PCM_LIMIT_ABS            30000
+#define UART_SEND_PCM_GATE_ENABLE          1
+#define UART_SEND_PCM_GATE_OPEN_ABS        900
+#define UART_SEND_PCM_GATE_CLOSE_ABS       550
+#define UART_SEND_PCM_GATE_CLOSE_GAIN_Q15  3277    /* ~0.10 */
+#define UART_SEND_PCM_GATE_ATTACK_SHIFT    2
+#define UART_SEND_PCM_GATE_RELEASE_SHIFT   5
 
 /* 单次 PTT 落盘上限，防止把 11MB 分区写满：约 30s @44.1k mono int16 */
 #define UART_SEND_PCM_FILE_MAX_BYTES    (44100u * 2u * 30u)
@@ -37,15 +59,163 @@
 #define UART_SEND_PCM_META_PATH         "/pcm/last.txt"
 
 static rt_device_t uart_send_pcm_device;
+static struct rt_thread uart_send_pcm_thread_obj;
 static rt_thread_t uart_send_pcm_thread;
-static rt_bool_t uart_send_pcm_running = RT_FALSE;
+static rt_bool_t uart_send_pcm_thread_started = RT_FALSE;
+static volatile rt_bool_t uart_send_pcm_running = RT_FALSE;
+static volatile rt_bool_t uart_send_pcm_done = RT_TRUE;
+static volatile rt_bool_t uart_send_pcm_ready = RT_FALSE;
+static volatile rt_err_t uart_send_pcm_start_result = -RT_ERROR;
+static rt_uint8_t uart_send_pcm_thread_stack[UART_SEND_PCM_THREAD_STACK_SIZE]
+    __attribute__((aligned(RT_ALIGN_SIZE), section(".ccmbss.uart_pcm_stack")));
 static rt_int16_t uart_send_pcm_buffer[UART_SEND_PCM_READ_FRAMES];
 
 static int uart_send_pcm_file_fd = -1;
 static rt_uint32_t uart_send_pcm_file_bytes = 0;
 static rt_uint32_t uart_send_pcm_uart_bytes = 0;
+static rt_uint32_t uart_send_pcm_uart_skipped_bytes = 0;
 static rt_uint32_t uart_send_pcm_file_drops = 0;
 static rt_bool_t uart_send_pcm_file_limit_logged = RT_FALSE;
+static rt_uint8_t uart_send_pcm_file_cache[UART_SEND_PCM_FILE_CACHE_BYTES];
+static rt_size_t uart_send_pcm_file_cache_len = 0;
+static rt_uint32_t uart_send_pcm_file_flushes = 0;
+static rt_int32_t uart_send_pcm_hp_prev_x = 0;
+static rt_int32_t uart_send_pcm_hp_prev_y = 0;
+static rt_int32_t uart_send_pcm_lp_y = 0;
+static rt_int32_t uart_send_pcm_gate_env = 0;
+static rt_int32_t uart_send_pcm_gate_gain_q15 = UART_SEND_PCM_GATE_CLOSE_GAIN_Q15;
+static rt_uint32_t uart_send_pcm_peak_abs = 0;
+static rt_uint32_t uart_send_pcm_limiter_hits = 0;
+
+static void uart_send_pcm_set_ready(rt_err_t result)
+{
+    uart_send_pcm_start_result = result;
+    uart_send_pcm_ready = RT_TRUE;
+}
+
+static void uart_send_pcm_reset_voice_process(void)
+{
+    uart_send_pcm_hp_prev_x = 0;
+    uart_send_pcm_hp_prev_y = 0;
+    uart_send_pcm_lp_y = 0;
+    uart_send_pcm_gate_env = 0;
+    uart_send_pcm_gate_gain_q15 = UART_SEND_PCM_GATE_CLOSE_GAIN_Q15;
+    uart_send_pcm_peak_abs = 0;
+    uart_send_pcm_limiter_hits = 0;
+}
+
+static void uart_send_pcm_process_samples(rt_int16_t *pcm, rt_uint32_t frames)
+{
+    rt_uint32_t i;
+
+    if ((pcm == RT_NULL) || (frames == 0u))
+    {
+        return;
+    }
+
+    for (i = 0u; i < frames; i++)
+    {
+        rt_int32_t sample;
+        rt_int32_t abs_sample;
+
+        sample = pcm[i];
+
+#if UART_SEND_PCM_VOICE_PROCESS_ENABLE
+        {
+            rt_int32_t hp;
+            rt_int32_t limited;
+
+            hp = sample - uart_send_pcm_hp_prev_x +
+                 (rt_int32_t)(((rt_int64_t)UART_SEND_PCM_HIGHPASS_A_Q15 *
+                                uart_send_pcm_hp_prev_y) >> 15);
+            uart_send_pcm_hp_prev_x = sample;
+            uart_send_pcm_hp_prev_y = hp;
+
+            uart_send_pcm_lp_y +=
+                (rt_int32_t)(((rt_int64_t)UART_SEND_PCM_LOWPASS_ALPHA_Q15 *
+                              (hp - uart_send_pcm_lp_y)) >> 15);
+
+            limited = (rt_int32_t)(((rt_int64_t)uart_send_pcm_lp_y *
+                                    UART_SEND_PCM_GAIN_Q8) >> 8);
+            if (limited > UART_SEND_PCM_LIMIT_ABS)
+            {
+                limited = UART_SEND_PCM_LIMIT_ABS;
+                uart_send_pcm_limiter_hits++;
+            }
+            else if (limited < -UART_SEND_PCM_LIMIT_ABS)
+            {
+                limited = -UART_SEND_PCM_LIMIT_ABS;
+                uart_send_pcm_limiter_hits++;
+            }
+
+            sample = limited;
+
+#if UART_SEND_PCM_GATE_ENABLE
+            {
+                rt_int32_t target_gain_q15;
+                rt_int32_t gated;
+
+                if (sample < 0)
+                {
+                    abs_sample = -sample;
+                }
+                else
+                {
+                    abs_sample = sample;
+                }
+
+                if (abs_sample > uart_send_pcm_gate_env)
+                {
+                    uart_send_pcm_gate_env += (rt_int32_t)((abs_sample - uart_send_pcm_gate_env) >> 5);
+                }
+                else
+                {
+                    uart_send_pcm_gate_env -= (rt_int32_t)((uart_send_pcm_gate_env - abs_sample) >> 5);
+                }
+
+                if (uart_send_pcm_gate_env > UART_SEND_PCM_GATE_OPEN_ABS)
+                {
+                    target_gain_q15 = 32768;
+                }
+                else if (uart_send_pcm_gate_env < UART_SEND_PCM_GATE_CLOSE_ABS)
+                {
+                    target_gain_q15 = UART_SEND_PCM_GATE_CLOSE_GAIN_Q15;
+                }
+                else
+                {
+                    target_gain_q15 = uart_send_pcm_gate_gain_q15;
+                }
+
+                if (target_gain_q15 > uart_send_pcm_gate_gain_q15)
+                {
+                    uart_send_pcm_gate_gain_q15 +=
+                        (rt_int32_t)((target_gain_q15 - uart_send_pcm_gate_gain_q15) >> UART_SEND_PCM_GATE_ATTACK_SHIFT);
+                }
+                else if (target_gain_q15 < uart_send_pcm_gate_gain_q15)
+                {
+                    uart_send_pcm_gate_gain_q15 -=
+                        (rt_int32_t)((uart_send_pcm_gate_gain_q15 - target_gain_q15) >> UART_SEND_PCM_GATE_RELEASE_SHIFT);
+                }
+
+                gated = (rt_int32_t)(((rt_int64_t)sample * uart_send_pcm_gate_gain_q15) >> 15);
+                sample = gated;
+            }
+#endif
+            pcm[i] = (rt_int16_t)sample;
+        }
+#endif
+
+        abs_sample = sample;
+        if (abs_sample < 0)
+        {
+            abs_sample = -abs_sample;
+        }
+        if ((rt_uint32_t)abs_sample > uart_send_pcm_peak_abs)
+        {
+            uart_send_pcm_peak_abs = (rt_uint32_t)abs_sample;
+        }
+    }
+}
 
 static void uart_send_pcm_close_device(void)
 {
@@ -131,17 +301,25 @@ static void uart_send_pcm_close_file(void)
 static void uart_send_pcm_write_meta(void)
 {
     int fd;
-    char buf[192];
+    char buf[512];
     int n;
     es8311_audio_capture_format_t fmt;
     rt_uint32_t sr = 44100;
     rt_uint32_t ch = 1;
+    rt_uint32_t capture_drops;
+    const char *processing;
 
     if (es8311_audio_get_capture_format(&fmt))
     {
         sr = fmt.sample_rate;
         ch = fmt.channels;
     }
+    capture_drops = es8311_audio_get_capture_drop_frames();
+#if UART_SEND_PCM_VOICE_PROCESS_ENABLE
+    processing = "hp120_lp6500_gate_gain_limiter";
+#else
+    processing = "off";
+#endif
 
     fd = open(UART_SEND_PCM_META_PATH, O_WRONLY | O_CREAT | O_TRUNC, 0);
     if (fd < 0)
@@ -155,17 +333,43 @@ static void uart_send_pcm_write_meta(void)
                     "format=s16le\n"
                     "channels=%u\n"
                     "sample_rate=%u\n"
+                    "uart3_enabled=%u\n"
                     "bytes=%u\n"
                     "frames=%u\n"
                     "uart3_bytes=%u\n"
-                    "file_drops=%u\n",
+                    "uart3_skipped_bytes=%u\n"
+                    "file_drops=%u\n"
+                    "file_cache_bytes=%u\n"
+                    "file_flushes=%u\n"
+                    "capture_drops=%u\n"
+                    "processing=%s\n"
+                    "gain_q8=%u\n"
+                    "limit_abs=%u\n"
+                    "gate_open_abs=%u\n"
+                    "gate_close_abs=%u\n"
+                    "gate_close_gain_q15=%u\n"
+                    "peak_abs=%u\n"
+                    "limiter_hits=%u\n",
                     UART_SEND_PCM_FILE_PATH,
                     (unsigned)ch,
                     (unsigned)sr,
+                    (unsigned)UART_SEND_PCM_UART_EXPORT_ENABLE,
                     (unsigned)uart_send_pcm_file_bytes,
                     (unsigned)(uart_send_pcm_file_bytes / 2u),
                     (unsigned)uart_send_pcm_uart_bytes,
-                    (unsigned)uart_send_pcm_file_drops);
+                    (unsigned)uart_send_pcm_uart_skipped_bytes,
+                    (unsigned)uart_send_pcm_file_drops,
+                    (unsigned)UART_SEND_PCM_FILE_CACHE_BYTES,
+                    (unsigned)uart_send_pcm_file_flushes,
+                    (unsigned)capture_drops,
+                    processing,
+                    (unsigned)UART_SEND_PCM_GAIN_Q8,
+                    (unsigned)UART_SEND_PCM_LIMIT_ABS,
+                    (unsigned)UART_SEND_PCM_GATE_OPEN_ABS,
+                    (unsigned)UART_SEND_PCM_GATE_CLOSE_ABS,
+                    (unsigned)UART_SEND_PCM_GATE_CLOSE_GAIN_Q15,
+                    (unsigned)uart_send_pcm_peak_abs,
+                    (unsigned)uart_send_pcm_limiter_hits);
     if (n > 0)
     {
         write(fd, buf, (rt_size_t)n);
@@ -195,6 +399,8 @@ static rt_err_t uart_send_pcm_open_file(void)
 
     uart_send_pcm_file_bytes = 0;
     uart_send_pcm_file_drops = 0;
+    uart_send_pcm_file_cache_len = 0;
+    uart_send_pcm_file_flushes = 0;
     uart_send_pcm_file_limit_logged = RT_FALSE;
     LOG_I("recording to %s (s16le mono, cap %u bytes)",
           UART_SEND_PCM_FILE_PATH,
@@ -202,7 +408,7 @@ static rt_err_t uart_send_pcm_open_file(void)
     return RT_EOK;
 }
 
-static void uart_send_pcm_write_file(const rt_uint8_t *data, rt_size_t bytes)
+static void uart_send_pcm_write_file_direct(const rt_uint8_t *data, rt_size_t bytes)
 {
     int written;
     rt_size_t remain;
@@ -252,37 +458,158 @@ static void uart_send_pcm_write_file(const rt_uint8_t *data, rt_size_t bytes)
     }
 }
 
-static void uart_send_pcm_thread_entry(void *parameter)
+static void uart_send_pcm_flush_file_cache(void)
+{
+    if (uart_send_pcm_file_cache_len == 0u)
+    {
+        return;
+    }
+
+    uart_send_pcm_write_file_direct(uart_send_pcm_file_cache, uart_send_pcm_file_cache_len);
+    uart_send_pcm_file_cache_len = 0u;
+    uart_send_pcm_file_flushes++;
+}
+
+static void uart_send_pcm_write_file(const rt_uint8_t *data, rt_size_t bytes)
+{
+    rt_size_t offset;
+
+    if ((uart_send_pcm_file_fd < 0) || (data == RT_NULL) || (bytes == 0u))
+    {
+        return;
+    }
+
+    offset = 0u;
+    while (offset < bytes)
+    {
+        rt_size_t free_bytes;
+        rt_size_t copy_bytes;
+
+        free_bytes = (rt_size_t)UART_SEND_PCM_FILE_CACHE_BYTES - uart_send_pcm_file_cache_len;
+        if (free_bytes == 0u)
+        {
+            uart_send_pcm_flush_file_cache();
+            free_bytes = (rt_size_t)UART_SEND_PCM_FILE_CACHE_BYTES;
+        }
+
+        copy_bytes = bytes - offset;
+        if (copy_bytes > free_bytes)
+        {
+            copy_bytes = free_bytes;
+        }
+
+        rt_memcpy(&uart_send_pcm_file_cache[uart_send_pcm_file_cache_len],
+                  data + offset,
+                  copy_bytes);
+        uart_send_pcm_file_cache_len += copy_bytes;
+        offset += copy_bytes;
+
+        if (uart_send_pcm_file_cache_len >= (rt_size_t)UART_SEND_PCM_FILE_CACHE_BYTES)
+        {
+            uart_send_pcm_flush_file_cache();
+        }
+    }
+}
+
+static void uart_send_pcm_export_frames(rt_bool_t uart_ok,
+                                        rt_bool_t file_ok,
+                                        rt_bool_t write_uart,
+                                        rt_uint32_t frames)
+{
+    rt_size_t bytes;
+
+    if (frames == 0u)
+    {
+        return;
+    }
+
+    bytes = (rt_size_t)frames * sizeof(uart_send_pcm_buffer[0]);
+    uart_send_pcm_process_samples(uart_send_pcm_buffer, frames);
+
+    if (uart_ok && write_uart)
+    {
+        uart_send_pcm_write_all((const rt_uint8_t *)uart_send_pcm_buffer, bytes);
+    }
+    if (file_ok)
+    {
+        uart_send_pcm_write_file((const rt_uint8_t *)uart_send_pcm_buffer, bytes);
+    }
+}
+
+static void uart_send_pcm_drain_file_tail(rt_bool_t file_ok)
+{
+    if (!file_ok || es8311_audio_is_capture_running())
+    {
+        return;
+    }
+
+    while (es8311_audio_get_capture_level_frames() > 0u)
+    {
+        rt_uint32_t frames;
+
+        frames = es8311_audio_read_capture(uart_send_pcm_buffer, UART_SEND_PCM_READ_FRAMES);
+        if (frames == 0u)
+        {
+            break;
+        }
+
+        uart_send_pcm_export_frames(RT_FALSE, file_ok, RT_FALSE, frames);
+    }
+}
+
+static void uart_send_pcm_run_session(void)
 {
     rt_bool_t uart_ok;
     rt_bool_t file_ok;
 
-    RT_UNUSED(parameter);
-
     uart_send_pcm_uart_bytes = 0;
+    uart_send_pcm_uart_skipped_bytes = 0;
     uart_send_pcm_file_bytes = 0;
     uart_send_pcm_file_drops = 0;
+    uart_send_pcm_reset_voice_process();
 
-    uart_ok = (uart_send_pcm_open_device() == RT_EOK) ? RT_TRUE : RT_FALSE;
-    file_ok = (uart_send_pcm_open_file() == RT_EOK) ? RT_TRUE : RT_FALSE;
+    if (UART_SEND_PCM_FILE_RECORD_ENABLE)
+    {
+        file_ok = (uart_send_pcm_open_file() == RT_EOK) ? RT_TRUE : RT_FALSE;
+    }
+    else
+    {
+        file_ok = RT_FALSE;
+        LOG_I("record-to-file disabled, stream raw s16le mono to uart3 only");
+    }
+
+    if (UART_SEND_PCM_UART_EXPORT_ENABLE || !file_ok)
+    {
+        uart_ok = (uart_send_pcm_open_device() == RT_EOK) ? RT_TRUE : RT_FALSE;
+    }
+    else
+    {
+        uart_ok = RT_FALSE;
+    }
 
     if (!uart_ok && !file_ok)
     {
         LOG_E("neither uart3 nor file available, pcm export exit");
+        uart_send_pcm_set_ready(-RT_ERROR);
         uart_send_pcm_running = RT_FALSE;
-        uart_send_pcm_thread = RT_NULL;
+        uart_send_pcm_done = RT_TRUE;
         return;
     }
 
-    if (!uart_ok)
+    if (!uart_ok && file_ok)
     {
-        LOG_W("uart3 unavailable, only record to file");
+        LOG_W("uart3 export disabled/unavailable, only record to file");
     }
+    else if (uart_ok && !file_ok)
+    {
+        LOG_I("uart3 export enabled, file record disabled");
+    }
+    uart_send_pcm_set_ready(RT_EOK);
 
     while (uart_send_pcm_running)
     {
         rt_uint32_t frames;
-        rt_size_t bytes;
+        rt_bool_t write_uart;
 
         frames = es8311_audio_read_capture(uart_send_pcm_buffer, UART_SEND_PCM_READ_FRAMES);
         if (frames == 0u)
@@ -291,65 +618,159 @@ static void uart_send_pcm_thread_entry(void *parameter)
             continue;
         }
 
-        bytes = (rt_size_t)frames * sizeof(uart_send_pcm_buffer[0]);
+        write_uart = uart_ok;
+        if (write_uart &&
+            (es8311_audio_get_capture_level_frames() > UART_SEND_PCM_UART_BACKLOG_LIMIT_FRAMES))
+        {
+            write_uart = RT_FALSE;
+            uart_send_pcm_uart_skipped_bytes += (rt_uint32_t)frames * 2u;
+        }
 
-        if (uart_ok)
-        {
-            uart_send_pcm_write_all((const rt_uint8_t *)uart_send_pcm_buffer, bytes);
-        }
-        if (file_ok)
-        {
-            uart_send_pcm_write_file((const rt_uint8_t *)uart_send_pcm_buffer, bytes);
-        }
+        uart_send_pcm_export_frames(uart_ok, file_ok, write_uart, frames);
     }
 
+    uart_send_pcm_drain_file_tail(file_ok);
+    uart_send_pcm_flush_file_cache();
     uart_send_pcm_close_file();
     if (file_ok)
     {
         uart_send_pcm_write_meta();
-        LOG_I("pcm saved: %s (%u bytes, ~%u ms @44.1k mono), uart3=%u, drops=%u",
+        LOG_I("pcm saved: %s (%u bytes, ~%u ms @44.1k mono), uart3=%u, uart3_skip=%u, file_drops=%u, capture_drops=%u, peak=%u, limiter=%u",
               UART_SEND_PCM_FILE_PATH,
               (unsigned)uart_send_pcm_file_bytes,
               (unsigned)((uart_send_pcm_file_bytes / 2u) * 1000u / 44100u),
               (unsigned)uart_send_pcm_uart_bytes,
-              (unsigned)uart_send_pcm_file_drops);
+              (unsigned)uart_send_pcm_uart_skipped_bytes,
+              (unsigned)uart_send_pcm_file_drops,
+              (unsigned)es8311_audio_get_capture_drop_frames(),
+              (unsigned)uart_send_pcm_peak_abs,
+              (unsigned)uart_send_pcm_limiter_hits);
         LOG_I("meta: %s  |  msh: fs_app_info / ls /pcm", UART_SEND_PCM_META_PATH);
+    }
+    else
+    {
+        LOG_I("pcm streamed: uart3=%u, uart3_skip=%u, capture_drops=%u, peak=%u, limiter=%u",
+              (unsigned)uart_send_pcm_uart_bytes,
+              (unsigned)uart_send_pcm_uart_skipped_bytes,
+              (unsigned)es8311_audio_get_capture_drop_frames(),
+              (unsigned)uart_send_pcm_peak_abs,
+              (unsigned)uart_send_pcm_limiter_hits);
     }
 
     uart_send_pcm_close_device();
-    uart_send_pcm_thread = RT_NULL;
+    uart_send_pcm_running = RT_FALSE;
+    uart_send_pcm_done = RT_TRUE;
 }
 
-rt_err_t uart_send_pcm_start(void)
+static void uart_send_pcm_thread_entry(void *parameter)
 {
-    if (uart_send_pcm_running)
+    RT_UNUSED(parameter);
+
+    while (1)
+    {
+        if (!uart_send_pcm_running)
+        {
+            rt_thread_mdelay(1);
+            continue;
+        }
+
+        uart_send_pcm_done = RT_FALSE;
+        uart_send_pcm_run_session();
+    }
+}
+
+static rt_err_t uart_send_pcm_ensure_thread(void)
+{
+    rt_err_t err;
+
+    if (uart_send_pcm_thread_started)
     {
         return RT_EOK;
     }
 
-    uart_send_pcm_running = RT_TRUE;
-    uart_send_pcm_thread = rt_thread_create("uart_pcm",
-                                            uart_send_pcm_thread_entry,
-                                            RT_NULL,
-                                            UART_SEND_PCM_THREAD_STACK_SIZE,
-                                            UART_SEND_PCM_THREAD_PRIORITY,
-                                            UART_SEND_PCM_THREAD_TICK);
-    if (uart_send_pcm_thread == RT_NULL)
+    uart_send_pcm_thread = &uart_send_pcm_thread_obj;
+    err = rt_thread_init(uart_send_pcm_thread,
+                         "uart_pcm",
+                         uart_send_pcm_thread_entry,
+                         RT_NULL,
+                         uart_send_pcm_thread_stack,
+                         sizeof(uart_send_pcm_thread_stack),
+                         UART_SEND_PCM_THREAD_PRIORITY,
+                         UART_SEND_PCM_THREAD_TICK);
+    if (err != RT_EOK)
     {
-        uart_send_pcm_running = RT_FALSE;
-        LOG_E("create uart_pcm thread failed");
-        return -RT_ENOMEM;
+        uart_send_pcm_thread = RT_NULL;
+        LOG_E("init uart_pcm thread failed: %d", err);
+        return err;
     }
 
-    rt_thread_startup(uart_send_pcm_thread);
+    err = rt_thread_startup(uart_send_pcm_thread);
+    if (err != RT_EOK)
+    {
+        (void)rt_thread_detach(uart_send_pcm_thread);
+        uart_send_pcm_thread = RT_NULL;
+        LOG_E("startup uart_pcm thread failed: %d", err);
+        return err;
+    }
+
+    uart_send_pcm_thread_started = RT_TRUE;
     return RT_EOK;
+}
+
+rt_err_t uart_send_pcm_start(void)
+{
+    rt_uint32_t wait_ms;
+    rt_err_t err;
+
+    if (uart_send_pcm_running)
+    {
+        for (wait_ms = 0u; (wait_ms < UART_SEND_PCM_START_WAIT_MS) && !uart_send_pcm_ready; wait_ms++)
+        {
+            rt_thread_mdelay(1);
+        }
+        return uart_send_pcm_ready ? uart_send_pcm_start_result : -RT_ETIMEOUT;
+    }
+
+    for (wait_ms = 0u; (wait_ms < UART_SEND_PCM_STOP_WAIT_MS) && !uart_send_pcm_done; wait_ms++)
+    {
+        rt_thread_mdelay(1);
+    }
+    if (!uart_send_pcm_done)
+    {
+        return -RT_EBUSY;
+    }
+
+    err = uart_send_pcm_ensure_thread();
+    if (err != RT_EOK)
+    {
+        return err;
+    }
+
+    uart_send_pcm_ready = RT_FALSE;
+    uart_send_pcm_start_result = -RT_ERROR;
+    uart_send_pcm_done = RT_FALSE;
+    uart_send_pcm_running = RT_TRUE;
+
+    for (wait_ms = 0u; (wait_ms < UART_SEND_PCM_START_WAIT_MS) && !uart_send_pcm_ready; wait_ms++)
+    {
+        rt_thread_mdelay(1);
+    }
+
+    if (!uart_send_pcm_ready)
+    {
+        uart_send_pcm_running = RT_FALSE;
+        LOG_W("pcm export prepare timeout");
+        return -RT_ETIMEOUT;
+    }
+
+    return uart_send_pcm_start_result;
 }
 
 void uart_send_pcm_stop(void)
 {
     rt_uint32_t wait_ms;
 
-    if (!uart_send_pcm_running && (uart_send_pcm_thread == RT_NULL))
+    if (!uart_send_pcm_running && uart_send_pcm_done)
     {
         return;
     }
@@ -357,8 +778,13 @@ void uart_send_pcm_stop(void)
     uart_send_pcm_running = RT_FALSE;
 
     /* 等线程把文件 close + meta 写完；落盘可能稍慢 */
-    for (wait_ms = 0u; (wait_ms < 500u) && (uart_send_pcm_thread != RT_NULL); wait_ms++)
+    for (wait_ms = 0u; (wait_ms < UART_SEND_PCM_STOP_WAIT_MS) && !uart_send_pcm_done; wait_ms++)
     {
         rt_thread_mdelay(1);
+    }
+
+    if (!uart_send_pcm_done)
+    {
+        LOG_W("pcm export stop timeout");
     }
 }
