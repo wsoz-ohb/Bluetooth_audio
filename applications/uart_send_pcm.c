@@ -36,6 +36,15 @@
 #define UART_SEND_PCM_FILE_RECORD_ENABLE 0
 #define UART_SEND_PCM_FILE_CACHE_BYTES  4096u
 
+/* 香橙派下行回复：44100 Hz / mono / signed int16 little-endian 裸 PCM。 */
+#define UART_PCM_RX_BUFFER_BYTES         1024u
+#define UART_PCM_RX_SAMPLE_RATE          44100u
+#define UART_PCM_RX_GAIN_Q15             4096    /* 0.125x, approximately -18dB */
+#define UART_PCM_RX_IDLE_TIMEOUT_MS      1000u
+#define UART_PCM_RX_THREAD_STACK_SIZE    4096u
+#define UART_PCM_RX_THREAD_PRIORITY      13u
+#define UART_PCM_RX_THREAD_TICK          10u
+
 /*
  * 轻量语音优化放在导出线程里做，避免在 I2S DMA 中断里增加计算量。
  * 当前参数偏向近讲/语音验证：去低频漂移、压掉高频噪声、补一点数字增益并限幅。
@@ -86,6 +95,25 @@ static rt_int32_t uart_send_pcm_gate_env = 0;
 static rt_int32_t uart_send_pcm_gate_gain_q15 = UART_SEND_PCM_GATE_CLOSE_GAIN_Q15;
 static rt_uint32_t uart_send_pcm_peak_abs = 0;
 static rt_uint32_t uart_send_pcm_limiter_hits = 0;
+
+/* UART3 在 PTT 期间发送，松手后自动切换为接收回复 PCM。 */
+static rt_device_t uart_pcm_rx_device;
+static struct rt_thread uart_pcm_rx_thread_obj;
+static rt_thread_t uart_pcm_rx_thread;
+static rt_bool_t uart_pcm_rx_thread_started = RT_FALSE;
+static volatile rt_bool_t uart_pcm_rx_enabled = RT_FALSE;
+static volatile rt_bool_t uart_pcm_rx_done = RT_TRUE;
+static struct rt_semaphore uart_pcm_rx_sem;
+static rt_bool_t uart_pcm_rx_sem_inited = RT_FALSE;
+static rt_uint8_t uart_pcm_rx_thread_stack[UART_PCM_RX_THREAD_STACK_SIZE]
+    __attribute__((aligned(RT_ALIGN_SIZE), section(".ccmbss.uart_pcm_rx_stack")));
+static rt_uint8_t uart_pcm_rx_read_buffer[UART_PCM_RX_BUFFER_BYTES];
+static rt_int16_t uart_pcm_rx_pcm_buffer[UART_PCM_RX_BUFFER_BYTES / 2u];
+static rt_bool_t uart_pcm_rx_pending_byte_valid = RT_FALSE;
+static rt_uint8_t uart_pcm_rx_pending_byte;
+static rt_bool_t uart_pcm_rx_audio_started = RT_FALSE;
+static rt_bool_t uart_pcm_rx_received_any = RT_FALSE;
+static rt_tick_t uart_pcm_rx_last_data_tick;
 
 static void uart_send_pcm_set_ready(rt_err_t result)
 {
@@ -268,12 +296,16 @@ static void uart_send_pcm_write_all(const rt_uint8_t *data, rt_size_t bytes)
 {
     rt_size_t offset = 0;
 
-    if (uart_send_pcm_device == RT_NULL)
+    if ((uart_send_pcm_device == RT_NULL) || (data == RT_NULL) || (bytes == 0u))
     {
         return;
     }
 
-    while ((offset < bytes) && uart_send_pcm_running)
+    /*
+     * running 只决定是否继续读取下一块采集数据。当前块一旦开始发送，
+     * 即使此时松开 PTT，也必须完整发完，避免在一个 16-bit 采样中间停下。
+     */
+    while (offset < bytes)
     {
         rt_size_t written;
 
@@ -287,6 +319,290 @@ static void uart_send_pcm_write_all(const rt_uint8_t *data, rt_size_t bytes)
         offset += written;
         uart_send_pcm_uart_bytes += (rt_uint32_t)written;
     }
+}
+
+static rt_err_t uart_pcm_rx_indicate(rt_device_t device, rt_size_t size)
+{
+    RT_UNUSED(device);
+    RT_UNUSED(size);
+
+    if (uart_pcm_rx_sem_inited)
+    {
+        rt_sem_release(&uart_pcm_rx_sem);
+    }
+
+    return RT_EOK;
+}
+
+static rt_err_t uart_pcm_rx_open(void)
+{
+    struct serial_configure config = RT_SERIAL_CONFIG_DEFAULT;
+    rt_err_t err;
+
+    uart_pcm_rx_device = rt_device_find(UART_SEND_PCM_DEVICE_NAME);
+    if (uart_pcm_rx_device == RT_NULL)
+    {
+        LOG_E("%s not found for RX", UART_SEND_PCM_DEVICE_NAME);
+        return -RT_ERROR;
+    }
+
+    config.baud_rate = UART_SEND_PCM_BAUD_RATE;
+    err = rt_device_control(uart_pcm_rx_device, RT_DEVICE_CTRL_CONFIG, &config);
+    if (err != RT_EOK)
+    {
+        LOG_E("%s RX config failed: %d", UART_SEND_PCM_DEVICE_NAME, err);
+        uart_pcm_rx_device = RT_NULL;
+        return err;
+    }
+
+    rt_device_set_rx_indicate(uart_pcm_rx_device, uart_pcm_rx_indicate);
+    err = rt_device_open(uart_pcm_rx_device,
+                         RT_DEVICE_OFLAG_RDWR | RT_DEVICE_FLAG_DMA_RX);
+    if (err != RT_EOK)
+    {
+        rt_device_set_rx_indicate(uart_pcm_rx_device, RT_NULL);
+        uart_pcm_rx_device = RT_NULL;
+        LOG_E("%s RX DMA open failed: %d", UART_SEND_PCM_DEVICE_NAME, err);
+        return err;
+    }
+
+    LOG_I("%s RX ready, format=44100Hz/mono/s16le", UART_SEND_PCM_DEVICE_NAME);
+    return RT_EOK;
+}
+
+static void uart_pcm_rx_close(void)
+{
+    if (uart_pcm_rx_device != RT_NULL)
+    {
+        rt_device_set_rx_indicate(uart_pcm_rx_device, RT_NULL);
+        (void)rt_device_close(uart_pcm_rx_device);
+        uart_pcm_rx_device = RT_NULL;
+    }
+}
+
+static void uart_pcm_rx_stop_audio(void)
+{
+    if (uart_pcm_rx_audio_started)
+    {
+        es8311_audio_stop_playback();
+        es8311_audio_flush_playback();
+        uart_pcm_rx_audio_started = RT_FALSE;
+    }
+}
+
+static rt_uint32_t uart_pcm_rx_write(const rt_uint8_t *data, rt_size_t bytes)
+{
+    rt_size_t offset = 0u;
+    rt_size_t sample_count;
+    rt_uint32_t frames = 0u;
+    rt_uint32_t i;
+
+    if ((data == RT_NULL) || (bytes == 0u))
+    {
+        return 0u;
+    }
+
+    if (uart_pcm_rx_pending_byte_valid)
+    {
+        uart_pcm_rx_pcm_buffer[0] = (rt_int16_t)((rt_uint16_t)uart_pcm_rx_pending_byte |
+                                                 ((rt_uint16_t)data[0] << 8));
+        uart_pcm_rx_pending_byte_valid = RT_FALSE;
+        offset = 1u;
+        frames = 1u;
+    }
+
+    if (((bytes - offset) & 1u) != 0u)
+    {
+        uart_pcm_rx_pending_byte = data[bytes - 1u];
+        uart_pcm_rx_pending_byte_valid = RT_TRUE;
+        bytes--;
+    }
+
+    sample_count = bytes / 2u;
+    if (sample_count > (sizeof(uart_pcm_rx_pcm_buffer) / sizeof(uart_pcm_rx_pcm_buffer[0])) - frames)
+    {
+        sample_count = (sizeof(uart_pcm_rx_pcm_buffer) / sizeof(uart_pcm_rx_pcm_buffer[0])) - frames;
+    }
+
+    for (i = 0u; i < (rt_uint32_t)sample_count; i++)
+    {
+        rt_size_t index = offset + (rt_size_t)i * 2u;
+        uart_pcm_rx_pcm_buffer[frames + i] =
+            (rt_int16_t)((rt_uint16_t)data[index] | ((rt_uint16_t)data[index + 1u] << 8));
+    }
+    frames += (rt_uint32_t)sample_count;
+
+    if (frames == 0u)
+    {
+        return 0u;
+    }
+
+    /* 只衰减香橙派回复语音，不改变蓝牙和麦克风上行的音量。 */
+    for (i = 0u; i < frames; i++)
+    {
+        uart_pcm_rx_pcm_buffer[i] =
+            (rt_int16_t)(((rt_int64_t)uart_pcm_rx_pcm_buffer[i] * UART_PCM_RX_GAIN_Q15) >> 15);
+    }
+
+    if (!uart_pcm_rx_audio_started)
+    {
+        if (es8311_audio_configure(UART_PCM_RX_SAMPLE_RATE, 1u) != RT_EOK ||
+            es8311_audio_start_playback() != RT_EOK)
+        {
+            LOG_E("start ES8311 playback for UART3 PCM failed");
+            return 0u;
+        }
+        uart_pcm_rx_audio_started = RT_TRUE;
+        LOG_I("UART3 reply PCM playback started");
+    }
+
+    return es8311_audio_write_playback(uart_pcm_rx_pcm_buffer,
+                                       frames,
+                                       1u,
+                                       UART_PCM_RX_SAMPLE_RATE);
+}
+
+static void uart_pcm_rx_thread_entry(void *parameter)
+{
+    RT_UNUSED(parameter);
+
+    while (1)
+    {
+        rt_size_t bytes;
+
+        if (!uart_pcm_rx_enabled)
+        {
+            uart_pcm_rx_done = RT_TRUE;
+            rt_thread_mdelay(1);
+            continue;
+        }
+
+        uart_pcm_rx_done = RT_FALSE;
+        uart_pcm_rx_pending_byte_valid = RT_FALSE;
+        uart_pcm_rx_received_any = RT_FALSE;
+        uart_pcm_rx_last_data_tick = 0u;
+
+        if (uart_pcm_rx_open() != RT_EOK)
+        {
+            uart_pcm_rx_enabled = RT_FALSE;
+            uart_pcm_rx_done = RT_TRUE;
+            continue;
+        }
+
+        while (uart_pcm_rx_enabled)
+        {
+            (void)rt_sem_take(&uart_pcm_rx_sem, rt_tick_from_millisecond(100));
+            do
+            {
+                bytes = rt_device_read(uart_pcm_rx_device,
+                                       0,
+                                       uart_pcm_rx_read_buffer,
+                                       sizeof(uart_pcm_rx_read_buffer));
+                if (bytes == 0u)
+                {
+                    break;
+                }
+
+                uart_pcm_rx_received_any = RT_TRUE;
+                uart_pcm_rx_last_data_tick = rt_tick_get();
+                (void)uart_pcm_rx_write(uart_pcm_rx_read_buffer, bytes);
+            } while (bytes == sizeof(uart_pcm_rx_read_buffer));
+
+            if (uart_pcm_rx_received_any &&
+                ((rt_tick_get() - uart_pcm_rx_last_data_tick) >=
+                 rt_tick_from_millisecond(UART_PCM_RX_IDLE_TIMEOUT_MS)))
+            {
+                uart_pcm_rx_stop_audio();
+                uart_pcm_rx_received_any = RT_FALSE;
+                uart_pcm_rx_last_data_tick = 0u;
+                LOG_I("UART3 reply PCM idle, waiting for next reply");
+            }
+        }
+
+        uart_pcm_rx_stop_audio();
+        uart_pcm_rx_close();
+        uart_pcm_rx_done = RT_TRUE;
+    }
+}
+
+static rt_err_t uart_pcm_rx_ensure_thread(void)
+{
+    rt_err_t err;
+
+    if (uart_pcm_rx_thread_started)
+    {
+        return RT_EOK;
+    }
+
+    err = rt_sem_init(&uart_pcm_rx_sem, "pcmrx", 0, RT_IPC_FLAG_FIFO);
+    if (err != RT_EOK)
+    {
+        return err;
+    }
+    uart_pcm_rx_sem_inited = RT_TRUE;
+
+    uart_pcm_rx_thread = &uart_pcm_rx_thread_obj;
+    err = rt_thread_init(uart_pcm_rx_thread,
+                         "pcm_rx",
+                         uart_pcm_rx_thread_entry,
+                         RT_NULL,
+                         uart_pcm_rx_thread_stack,
+                         sizeof(uart_pcm_rx_thread_stack),
+                         UART_PCM_RX_THREAD_PRIORITY,
+                         UART_PCM_RX_THREAD_TICK);
+    if (err != RT_EOK)
+    {
+        uart_pcm_rx_thread = RT_NULL;
+        rt_sem_detach(&uart_pcm_rx_sem);
+        uart_pcm_rx_sem_inited = RT_FALSE;
+        return err;
+    }
+
+    err = rt_thread_startup(uart_pcm_rx_thread);
+    if (err != RT_EOK)
+    {
+        (void)rt_thread_detach(uart_pcm_rx_thread);
+        uart_pcm_rx_thread = RT_NULL;
+        rt_sem_detach(&uart_pcm_rx_sem);
+        uart_pcm_rx_sem_inited = RT_FALSE;
+        return err;
+    }
+
+    uart_pcm_rx_thread_started = RT_TRUE;
+    return RT_EOK;
+}
+
+static rt_err_t uart_pcm_rx_disable(void)
+{
+    rt_uint32_t wait_ms;
+
+    uart_pcm_rx_enabled = RT_FALSE;
+    if (uart_pcm_rx_sem_inited)
+    {
+        rt_sem_release(&uart_pcm_rx_sem);
+    }
+
+    for (wait_ms = 0u;
+         (wait_ms < UART_SEND_PCM_STOP_WAIT_MS) && !uart_pcm_rx_done;
+         wait_ms++)
+    {
+        rt_thread_mdelay(1);
+    }
+
+    return uart_pcm_rx_done ? RT_EOK : -RT_ETIMEOUT;
+}
+
+static void uart_pcm_rx_enable(void)
+{
+    if (uart_pcm_rx_ensure_thread() != RT_EOK)
+    {
+        LOG_E("start UART3 PCM RX thread failed");
+        return;
+    }
+
+    uart_pcm_rx_done = RT_FALSE;
+    uart_pcm_rx_enabled = RT_TRUE;
+    rt_sem_release(&uart_pcm_rx_sem);
 }
 
 static void uart_send_pcm_close_file(void)
@@ -731,6 +1047,14 @@ rt_err_t uart_send_pcm_start(void)
         return uart_send_pcm_ready ? uart_send_pcm_start_result : -RT_ETIMEOUT;
     }
 
+    /* 新一轮 PTT 开始前先关闭下行接收，UART3 切回发送方向。 */
+    err = uart_pcm_rx_disable();
+    if (err != RT_EOK)
+    {
+        LOG_W("stop UART3 PCM RX timeout");
+        return err;
+    }
+
     for (wait_ms = 0u; (wait_ms < UART_SEND_PCM_STOP_WAIT_MS) && !uart_send_pcm_done; wait_ms++)
     {
         rt_thread_mdelay(1);
@@ -770,21 +1094,23 @@ void uart_send_pcm_stop(void)
 {
     rt_uint32_t wait_ms;
 
-    if (!uart_send_pcm_running && uart_send_pcm_done)
+    if (uart_send_pcm_running || !uart_send_pcm_done)
     {
-        return;
-    }
+        uart_send_pcm_running = RT_FALSE;
 
-    uart_send_pcm_running = RT_FALSE;
-
-    /* 等线程把文件 close + meta 写完；落盘可能稍慢 */
-    for (wait_ms = 0u; (wait_ms < UART_SEND_PCM_STOP_WAIT_MS) && !uart_send_pcm_done; wait_ms++)
-    {
-        rt_thread_mdelay(1);
+        /* 等线程完成 UART TX close；关闭之后才能把 uart3 切为 DMA RX。 */
+        for (wait_ms = 0u; (wait_ms < UART_SEND_PCM_STOP_WAIT_MS) && !uart_send_pcm_done; wait_ms++)
+        {
+            rt_thread_mdelay(1);
+        }
     }
 
     if (!uart_send_pcm_done)
     {
         LOG_W("pcm export stop timeout");
+        return;
     }
+
+    /* PTT 松手后直接进入等待回复状态，不需要额外的 MSH 命令。 */
+    uart_pcm_rx_enable();
 }
