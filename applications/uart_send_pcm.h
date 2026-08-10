@@ -14,6 +14,7 @@ extern "C" {
 
 rt_err_t uart_send_pcm_start(void);
 void uart_send_pcm_stop(void);
+void uart_send_pcm_start_reply_rx(void);
 
 #if defined(__cplusplus)
 }

@@ -207,6 +207,49 @@ static void gui_main_set_label_if_changed(lv_obj_t *label,
     lv_label_set_text(label, text);
 }
 
+static rt_bool_t gui_main_ascii_case_equal(const char *lhs, const char *rhs)
+{
+    char lhs_ch;
+    char rhs_ch;
+
+    if ((lhs == RT_NULL) || (rhs == RT_NULL))
+    {
+        return RT_FALSE;
+    }
+
+    while ((*lhs != '\0') && (*rhs != '\0'))
+    {
+        lhs_ch = *lhs++;
+        rhs_ch = *rhs++;
+        if ((lhs_ch >= 'A') && (lhs_ch <= 'Z'))
+        {
+            lhs_ch = (char)(lhs_ch + ('a' - 'A'));
+        }
+        if ((rhs_ch >= 'A') && (rhs_ch <= 'Z'))
+        {
+            rhs_ch = (char)(rhs_ch + ('a' - 'A'));
+        }
+        if (lhs_ch != rhs_ch)
+        {
+            return RT_FALSE;
+        }
+    }
+
+    return (rt_bool_t)((*lhs == '\0') && (*rhs == '\0'));
+}
+
+static rt_bool_t gui_main_meta_is_unavailable(const char *text)
+{
+    if ((text == RT_NULL) || (text[0] == '\0'))
+    {
+        return RT_TRUE;
+    }
+
+    return (rt_bool_t)(gui_main_ascii_case_equal(text, "Not Provided") ||
+                       gui_main_ascii_case_equal(text, "Not Provide") ||
+                       gui_main_ascii_case_equal(text, "Unknown"));
+}
+
 static const char *gui_main_status_text(bt_avrcp_ct_link_state_t link_state,
                                         bt_avrcp_ct_playback_state_t playback_state)
 {
@@ -274,7 +317,7 @@ static void gui_main_refresh(lv_timer_t *timer)
         pos_ms = s_main.last_pos_ms;
     }
 
-    if ((title == RT_NULL) || (title[0] == '\0'))
+    if (gui_main_meta_is_unavailable(title))
     {
         if (link_state != BT_AVRCP_CT_LINK_STATE_CONNECTED)
         {
@@ -286,7 +329,7 @@ static void gui_main_refresh(lv_timer_t *timer)
         }
     }
 
-    if ((artist == RT_NULL) || (artist[0] == '\0'))
+    if (gui_main_meta_is_unavailable(artist))
     {
         if (link_state != BT_AVRCP_CT_LINK_STATE_CONNECTED)
         {

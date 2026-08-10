@@ -776,8 +776,31 @@ static uint8_t avrcp_controller_request_pass_through_release_control_cmd(avrcp_c
 static void avrcp_controller_response_timeout_handler(btstack_timer_source_t * timer){
     avrcp_connection_t * connection = (avrcp_connection_t*) btstack_run_loop_get_timer_context(timer);
     if (connection->state == AVCTP_W2_RECEIVE_RESPONSE){
+        /* Some phones do not answer GET_CAPABILITIES although they accept
+         * REGISTER_NOTIFICATION. Keep the requested events as an optimistic
+         * capability set, otherwise the controller remains stuck in
+         * W4_QUERY_RESULT and never sends its queued registrations. A target
+         * that does not support an event can still reject its registration. */
+        if ((connection->pdu_id == AVRCP_PDU_ID_GET_CAPABILITIES) &&
+            (connection->remote_capabilities_state == AVRCP_REMOTE_CAPABILITIES_W4_QUERY_RESULT)){
+            connection->controller_notifications_supported_by_target_suppress_emit_result = false;
+            if (connection->controller_notifications_to_register != 0u){
+                connection->notifications_supported_by_target |= connection->controller_notifications_to_register;
+                connection->remote_capabilities_state = AVRCP_REMOTE_CAPABILITIES_KNOWN;
+            } else {
+                connection->remote_capabilities_state = AVRCP_REMOTE_CAPABILITIES_NONE;
+            }
+        }
+
         connection->state = AVCTP_CONNECTION_OPENED;
         avrcp_controller_emit_operation_complete(avrcp_controller_context.avrcp_callback, connection, AVRCP_CTYPE_RESPONSE_INTERIM, connection->operation_id & 0x7F, ERROR_CODE_PAGE_TIMEOUT);
+
+        /* Normal responses reach the equivalent scheduling path at the end
+         * of avrcp_handle_l2cap_data_packet_for_signaling_connection. */
+        if ((connection->state == AVCTP_CONNECTION_OPENED) &&
+            (connection->controller_notifications_to_register != 0u)){
+            avrcp_request_can_send_now(connection, connection->l2cap_signaling_cid);
+        }
     }
 }
 

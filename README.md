@@ -1,9 +1,9 @@
 # Bluetooth Audio 当前架构说明
 
-> 更新时间：2026-07-27  
+> 更新时间：2026-08-10
 > 主控：STM32F407VG + RT-Thread 4.1.1  
 > 蓝牙：外挂 ESP32-WROOM-32E（Controller）+ 工程内 `BT-STACK`（Host）  
-> 当前定位：**可工作的蓝牙音箱产品雏形**（A2DP 播放 + AVRCP 控制 + 播放页 GUI + 中文字库）
+> 当前定位：**蓝牙音箱 + PTT AI 对话**（A2DP/AI PCM 混音 + AVRCP + GUI）
 
 本文只描述**已经在代码里落地**的架构与能力，不把“计划做”的事写成已完成。
 
@@ -24,6 +24,8 @@
   - 歌名 / 歌手中文显示、进度条、矢量旋转圆盘、状态文案
 - **板载 W25Q128**：SFUD + FAL 分区；`font` 分区存放 ZBFT 点阵字库
 - 开机提示音与 Welcome 淡出同步
+- 长按 PTT 采集 PCM，经 `uart3` 与香橙派完成 AI 对话
+- A2DP 背景音与 AI 回复统一进入 `audio_mixer`，AI 回复期间自动 Duck
 
 ### 1.2 明确未做 / 未产品化
 
@@ -36,8 +38,8 @@
 | OTA（fw_a / fw_b） | 仅分区预留 |
 | 触摸屏播控 | 未做（播控走按键/编码器） |
 | SPI DMA 刷屏 | 未做（draw buf 在 CCM，DMA 不可见） |
-| AI 对话 / 香橙派联动 | **下一阶段**（本文档之后） |
-| 采集导出主业务 | `es8311` 仍有 CAPTURE 能力，`uart_send_pcm` 仍在，但 **main / control 已不再切采集** |
+| AI UART 帧协议 | 当前仍为 44.1kHz mono s16le 裸流，以空闲超时判断回复结束 |
+| 全双工回声消除 | 未做；PTT 采集期间播放与采集保持互斥 |
 
 ---
 
@@ -55,8 +57,9 @@
 |    bt_app.c               BT Host + profile 注册                 |
 |    bt_a2dp_sink_app.c     A2DP Sink 事件 / media 转发            |
 |    bt_a2dp_audio.c        RTP/SBC 解码 → PCM                     |
+|    audio_mixer.c          A2DP/AI 双音源 ring、Duck 与饱和混音   |
 |    bt_avrcp_ct_app.c      AVRCP CT/TG、元数据、音量              |
-|    es8311_audio.c         统一音频会话（播放 ring + I2S DMA）    |
+|    es8311_audio.c         Codec、采集会话与 I2S DMA 输出         |
 |    control_app.c          按键 + 旋转编码器 → AVRCP              |
 |    lcd_app / mylvgl_app   ST7789 + LVGL 显示端口                 |
 |    gui_manager / welcome / main   界面管理与播放页               |
@@ -126,7 +129,7 @@ LVGL 线程
 |---|---|
 | `bt_app.c` | Host 初始化编排；只注册 A2DP Sink + AVRCP |
 | `bt_a2dp_sink_app.c` | SEP / SDP / stream 事件；media 包交给解码层；suspend/resume 查询 |
-| `bt_a2dp_audio.c` | RTP + SBC 解码；写 `es8311_audio` 播放接口；满缓冲回压丢包 |
+| `bt_a2dp_audio.c` | RTP + SBC 解码；写 Mixer 背景音源；满缓冲回压丢包 |
 | `bt_avrcp_ct_app.c` | CT 控制 + TG 侧绝对音量；Now Playing 缓存；状态机防重入 |
 
 AVRCP 对外只读接口（GUI 用）：
@@ -140,10 +143,17 @@ AVRCP 对外只读接口（GUI 用）：
 
 ### 4.2 音频会话
 
-`es8311_audio.c` 是音频核心，不是单纯 codec 包装：
+`audio_mixer.c` 是统一播放入口：
+
+- 背景音源：A2DP stereo PCM
+- 语音音源：香橙派 AI mono PCM
+- 单路时 1.0 原样直通；双路时 AI 保持 1.0，背景音在约 20ms 内降到 0.2
+- AI PCM 暂时断流或结束后，背景音约 250ms 平滑恢复，最终输出使用 int16 饱和保护
+
+`es8311_audio.c` 负责硬件会话：
 
 - 模式：`IDLE` / `PLAYBACK` / `CAPTURE`（互斥）
-- 播放 ring、采集 ring 放在 **CCM**（CPU 可见，DMA 不可见）
+- Mixer 背景 ring 放在 **CCM**；采集 ring 和 AI ring 放在主 RAM
 - I2S DMA 双缓冲必须在 **主 RAM**
 - 本地音量 0~127，与 AVRCP Absolute Volume 对齐
 - `boot_prompt_play_once()`：开机提示音
@@ -197,13 +207,13 @@ filesystem  5 ~ 16MB    littlefs 预留（业务未挂载产品化）
 |---|---|
 | `uart1` | 控制台 / msh / YMODEM 烧字库 |
 | `uart2` | 蓝牙 HCI H4（921600 + 流控）→ ESP32 |
-| `uart3` | 历史 PCM 导出（`uart_send_pcm`，当前未挂主业务） |
+| `uart3` | PTT PCM 上行与 AI 回复 PCM 下行（2Mbps，半双工切换） |
 | `i2c1`（软） | ES8311 控制，SCL=`PC11`，SDA=`PC12` |
 | `I2S2` + DMA | ES8311 数字音频（播放 / 全双工采集能力仍在） |
 | `SPI1` | **共总线**：ST7789 CS=`PC4` + W25Q128 CS=`PA4`；SCK/MISO/MOSI=`PA5/6/7` |
 | `PC9` | 按键 SW |
 | `PB6/PB7` | 旋转编码器 CLK/DT |
-| CCM 64KB | 播放 ring + 采集 ring + LVGL draw buf（**不可 DMA**） |
+| CCM 64KB | Mixer 背景 ring + UART 线程栈 + LVGL draw buf（**不可 DMA**） |
 
 ---
 
@@ -217,13 +227,26 @@ filesystem  5 ~ 16MB    littlefs 预留（业务未挂载产品化）
   → bt_a2dp_sink media handler
   → bt_a2dp_audio_process_media_packet()
        RTP/SBC 解析 → SBC decode
-  → es8311_audio_write_playback_checked()
-  → playback ring (CCM)
+  → audio_mixer_write(BACKGROUND)
+  → background ring (CCM)
+  → audio_mixer_render_stereo()
   → 过启动阈值后 I2S TX DMA
   → ES8311 DAC → 喇叭
 ```
 
-### 6.2 控制与元数据
+### 6.2 PTT AI 对话
+
+```text
+长按 PTT
+  → 暂停 A2DP、关闭本地 media gate
+  → ES8311 CAPTURE → uart3 TX → 香橙派
+松开 PTT
+  → 退出 CAPTURE、恢复 A2DP、uart3 切 RX
+  → AI mono PCM → audio_mixer_write(VOICE)
+  → 与 BACKGROUND Duck 混音 → ES8311 DAC
+```
+
+### 6.3 控制与元数据
 
 ```text
 按键/编码器
@@ -236,7 +259,7 @@ filesystem  5 ~ 16MB    littlefs 预留（业务未挂载产品化）
   → gui_main 400ms timer 差分刷新 UI
 ```
 
-### 6.3 显示刷新
+### 6.4 显示刷新
 
 ```text
 LVGL 脏区渲染 → CCM draw buf
@@ -261,16 +284,17 @@ LVGL 脏区渲染 → CCM draw buf
 
 ### 7.2 SBC 能力（常见组合）
 
-- 44.1 / 48 kHz；Stereo / Joint Stereo
+- 44.1 kHz；Stereo / Joint Stereo
 - block 4~16；subbands 4/8；Loudness/SNR；bitpool 2~53
-- 偏好：44.1 kHz + Joint Stereo + 16 blocks + 8 subbands + Loudness
+- 固定 44.1 kHz，与采集及 AI PCM 保持一致，不引入重采样
 
-### 7.3 音频缓冲（`es8311_audio.c`）
+### 7.3 音频缓冲
 
 - DMA half：512 frames；DMA buffer：1024 frames
-- Playback ring：8192 frames（立体声，CCM）
-- Capture ring：4096 frames（单声道有效 slot，CCM）
-- 播放启动阈值：6144 frames
+- Mixer background ring：8192 frames（立体声，CCM）
+- Mixer voice ring：4096 frames（单声道，主 RAM）
+- Capture ring：8192 frames（单声道有效 slot，主 RAM，约 186ms）
+- 背景音启动阈值：6144 frames；AI 单独播放启动阈值：1024 frames
 - 默认采样率：44.1 kHz
 
 ### 7.4 GUI / 总线
@@ -357,10 +381,9 @@ LVGL 脏区渲染 → CCM draw buf
 
 音箱主链路可视为 **MVP 已闭环**。建议优先级：
 
-1. **下一阶段：AI 对话 + 香橙派**（用户规划中）  
-   - 需先定：链路形态（UART/SPI/网络）、音频谁采谁播、唤醒/全双工策略、与 A2DP 互斥还是可打断  
+1. 为 AI UART 增加长度、结束标记和校验，替代裸流空闲超时
 2. 补 SBC fragmentation，提升多机型稳定性  
-3. littlefs 真正挂载（配置 / 日志 / 资源）  
+3. 根据实机听感调校 Mixer Duck 比例和 attack/release
 4. 若要更顺滑 GUI：主 RAM 双 draw buf + SPI DMA，或 LCD/Flash 分总线  
 5. OTA 与 fw_a/fw_b 落地  
 6. 需要时再开 HFP / BLE
@@ -369,10 +392,9 @@ LVGL 脏区渲染 → CCM draw buf
 
 ## 13. 一句话总结
 
-当前工程已是一条可演示的 **Classic 蓝牙音箱主链**：
+当前工程已形成 **蓝牙音箱 + PTT AI 对话 + 双音源混音** 主链：
 
 `手机 → ESP32 Controller → BT-STACK A2DP/AVRCP → SBC 解码 → ES8311 播放`  
 + `按键/编码器本地控播`  
 + `LVGL 播放页 + W25Q 中文字库`
-
-下一阶段重心转向 **香橙派 AI 对话接入**，而不是继续堆音箱展示功能。
++ `PTT PCM ↔ 香橙派 AI，回复语音与 A2DP 背景音动态混音`

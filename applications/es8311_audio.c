@@ -8,7 +8,6 @@
 #include "es8311_driver.h"
 #include "stm32f4xx_hal.h"
 #include "stm32f4xx_hal_i2s_ex.h"
-#include "audio_define.h"
 
 #define DBG_TAG "es8311_audio"
 #define DBG_LVL DBG_WARNING
@@ -21,11 +20,8 @@
 #define ES8311_AUDIO_DMA_BUFFER_FRAMES               (ES8311_AUDIO_DMA_HALF_FRAMES * 2u)
 #define ES8311_AUDIO_DMA_TX_SAMPLES                  (ES8311_AUDIO_DMA_BUFFER_FRAMES * ES8311_AUDIO_PLAYBACK_OUTPUT_CHANNELS)
 #define ES8311_AUDIO_DMA_RX_SAMPLES                  (ES8311_AUDIO_DMA_BUFFER_FRAMES * ES8311_AUDIO_PLAYBACK_OUTPUT_CHANNELS)
-#define ES8311_AUDIO_PLAYBACK_BUFFER_FRAMES          8192u
-#define ES8311_AUDIO_PLAYBACK_BUFFER_SAMPLES         (ES8311_AUDIO_PLAYBACK_BUFFER_FRAMES * ES8311_AUDIO_PLAYBACK_OUTPUT_CHANNELS)
-#define ES8311_AUDIO_CAPTURE_BUFFER_FRAMES           12288u
+#define ES8311_AUDIO_CAPTURE_BUFFER_FRAMES           8192u
 #define ES8311_AUDIO_CAPTURE_BUFFER_SAMPLES          (ES8311_AUDIO_CAPTURE_BUFFER_FRAMES * ES8311_AUDIO_CAPTURE_OUTPUT_CHANNELS)
-#define ES8311_AUDIO_PLAYBACK_START_THRESHOLD_FRAMES (ES8311_AUDIO_DMA_BUFFER_FRAMES * 6u)
 
 extern I2S_HandleTypeDef hi2s2;
 
@@ -47,7 +43,7 @@ typedef enum
 // 统一音频会话上下文。
 // 这个文件不把播放/采集拆成两个独立状态机，而是集中在一个上下文里维护：
 // - 当前 I2S/DMA 工作模式
-// - playback/capture ring buffer
+// - Mixer playback renderer / capture ring buffer
 // - codec 当前 sample rate
 // - 采集 slot 自动选择结果
 typedef struct
@@ -62,28 +58,24 @@ typedef struct
     rt_bool_t capture_running;
     rt_bool_t playback_start_pending;
     rt_bool_t playback_underflow_notice_printed;
-    rt_bool_t playback_overflow_notice_printed;
     rt_bool_t capture_overflow_notice_printed;
     rt_uint32_t capture_drop_frames;
     rt_uint32_t sample_rate;
-    rt_uint8_t playback_channels;
     rt_uint8_t volume_0_127;
     rt_uint8_t capture_slot;
     rt_bool_t capture_slot_locked;
     rt_bool_t capture_diag_printed;
     rt_bool_t capture_saturated_notice_printed;
-    es8311_audio_ring_t playback_ring;
     es8311_audio_ring_t capture_ring;
+    es8311_audio_playback_renderer_t playback_renderer;
+    void * playback_renderer_context;
 } es8311_audio_context_t;
 
 static es8311_audio_context_t es8311_audio_ctx;
 /* dma_tx/rx 是 I2S DMA 直接搬运的缓冲,必须留在主 RAM(CCM 对 DMA 不可见) */
 static rt_uint16_t es8311_audio_dma_tx_buffer[ES8311_AUDIO_DMA_TX_SAMPLES];
 static rt_uint16_t es8311_audio_dma_rx_buffer[ES8311_AUDIO_DMA_RX_SAMPLES];
-/* 播放环形缓冲只有 CPU 读写，放 CCM RAM 给主 RAM 的堆腾空间。
- * 采集环形缓冲要扛住 littlefs/串口短时阻塞，放主 SRAM 并适当加大。 */
-static rt_int16_t es8311_audio_playback_buffer[ES8311_AUDIO_PLAYBACK_BUFFER_SAMPLES]
-    __attribute__((section(".ccmbss.es8311_playback")));
+/* 采集环形缓冲要扛住 littlefs/串口短时阻塞，放主 SRAM 并适当加大。 */
 static rt_int16_t es8311_audio_capture_buffer[ES8311_AUDIO_CAPTURE_BUFFER_SAMPLES];
 
 typedef struct
@@ -124,13 +116,9 @@ static uint32_t es8311_audio_sample_rate_to_hal(rt_uint32_t sample_rate)
     }
 }
 
-static void es8311_audio_reset_playback_ring_locked(void)
+static void es8311_audio_reset_playback_state_locked(void)
 {
-    es8311_audio_ctx.playback_ring.read = 0u;
-    es8311_audio_ctx.playback_ring.write = 0u;
-    es8311_audio_ctx.playback_ring.level = 0u;
     es8311_audio_ctx.playback_underflow_notice_printed = RT_FALSE;
-    es8311_audio_ctx.playback_overflow_notice_printed = RT_FALSE;
     es8311_audio_ctx.playback_start_pending = RT_FALSE;
 }
 
@@ -217,25 +205,6 @@ static rt_bool_t es8311_audio_slot_stats_saturated(const es8311_audio_slot_stats
                                                    rt_uint32_t frames)
 {
     return (rt_bool_t) ((frames > 0u) && (stats->saturated == frames));
-}
-
-static void es8311_audio_drop_oldest_playback_frames_locked(rt_uint32_t frames)
-{
-    rt_size_t drop_samples;
-
-    drop_samples = (rt_size_t) frames * ES8311_AUDIO_PLAYBACK_OUTPUT_CHANNELS;
-    if (drop_samples > es8311_audio_ctx.playback_ring.level)
-    {
-        drop_samples = es8311_audio_ctx.playback_ring.level;
-    }
-
-    drop_samples -= drop_samples % ES8311_AUDIO_PLAYBACK_OUTPUT_CHANNELS;
-    es8311_audio_ctx.playback_ring.read += drop_samples;
-    while (es8311_audio_ctx.playback_ring.read >= ES8311_AUDIO_PLAYBACK_BUFFER_SAMPLES)
-    {
-        es8311_audio_ctx.playback_ring.read -= ES8311_AUDIO_PLAYBACK_BUFFER_SAMPLES;
-    }
-    es8311_audio_ctx.playback_ring.level -= drop_samples;
 }
 
 static rt_err_t es8311_audio_apply_codec_state(void)
@@ -509,72 +478,41 @@ static rt_err_t es8311_audio_i2s_reconfigure(rt_uint32_t sample_rate)
     return RT_EOK;
 }
 
-static rt_uint32_t es8311_audio_read_playback_frames(rt_uint16_t * target, rt_uint32_t frames)
-{
-    rt_uint32_t frame_index;
-    rt_uint32_t read_frames;
-    rt_base_t level;
-
-    read_frames = 0u;
-
-    level = rt_hw_interrupt_disable();
-    for (frame_index = 0u; frame_index < frames; frame_index++)
-    {
-        rt_int16_t left_sample;
-        rt_int16_t right_sample;
-
-        if ((es8311_audio_ctx.playback_ring.level < ES8311_AUDIO_PLAYBACK_OUTPUT_CHANNELS) ||
-            !es8311_audio_ctx.playback_running ||
-            es8311_audio_ctx.playback_start_pending)
-        {
-            break;
-        }
-
-        left_sample = es8311_audio_playback_buffer[es8311_audio_ctx.playback_ring.read];
-        es8311_audio_ctx.playback_ring.read++;
-        if (es8311_audio_ctx.playback_ring.read >= ES8311_AUDIO_PLAYBACK_BUFFER_SAMPLES)
-        {
-            es8311_audio_ctx.playback_ring.read = 0u;
-        }
-
-        right_sample = es8311_audio_playback_buffer[es8311_audio_ctx.playback_ring.read];
-        es8311_audio_ctx.playback_ring.read++;
-        if (es8311_audio_ctx.playback_ring.read >= ES8311_AUDIO_PLAYBACK_BUFFER_SAMPLES)
-        {
-            es8311_audio_ctx.playback_ring.read = 0u;
-        }
-
-        es8311_audio_ctx.playback_ring.level -= ES8311_AUDIO_PLAYBACK_OUTPUT_CHANNELS;
-        target[(rt_size_t) frame_index * ES8311_AUDIO_PLAYBACK_OUTPUT_CHANNELS] = (rt_uint16_t) left_sample;
-        target[(rt_size_t) frame_index * ES8311_AUDIO_PLAYBACK_OUTPUT_CHANNELS + 1u] = (rt_uint16_t) right_sample;
-        read_frames++;
-    }
-    rt_hw_interrupt_enable(level);
-
-    return read_frames;
-}
-
 static void es8311_audio_fill_tx_range(rt_size_t offset_frames, rt_size_t frames)
 {
-    rt_uint32_t copied_frames;
+    rt_uint32_t rendered_frames;
     rt_size_t total_samples;
-    rt_size_t copied_samples;
+    rt_size_t rendered_samples;
     rt_size_t sample_index;
+    rt_int16_t * target;
 
     total_samples = frames * ES8311_AUDIO_PLAYBACK_OUTPUT_CHANNELS;
-    copied_frames = es8311_audio_read_playback_frames(&es8311_audio_dma_tx_buffer[offset_frames * ES8311_AUDIO_PLAYBACK_OUTPUT_CHANNELS],
-                                                      (rt_uint32_t) frames);
-    copied_samples = (rt_size_t) copied_frames * ES8311_AUDIO_PLAYBACK_OUTPUT_CHANNELS;
+    target = (rt_int16_t *) &es8311_audio_dma_tx_buffer[offset_frames * ES8311_AUDIO_PLAYBACK_OUTPUT_CHANNELS];
+    rendered_frames = 0u;
 
-    if ((copied_frames < frames) && es8311_audio_ctx.playback_running &&
+    if (es8311_audio_ctx.playback_running &&
+        !es8311_audio_ctx.playback_start_pending &&
+        (es8311_audio_ctx.playback_renderer != RT_NULL))
+    {
+        rendered_frames = es8311_audio_ctx.playback_renderer(target,
+                                                             (rt_uint32_t) frames,
+                                                             es8311_audio_ctx.playback_renderer_context);
+        if (rendered_frames > frames)
+        {
+            rendered_frames = (rt_uint32_t) frames;
+        }
+    }
+    rendered_samples = (rt_size_t) rendered_frames * ES8311_AUDIO_PLAYBACK_OUTPUT_CHANNELS;
+
+    if ((rendered_frames < frames) && es8311_audio_ctx.playback_running &&
         !es8311_audio_ctx.playback_underflow_notice_printed)
     {
         es8311_audio_ctx.playback_underflow_notice_printed = RT_TRUE;
-        LOG_W("playback underflow, TX outputs silence");
+        LOG_W("playback renderer underflow, TX outputs silence");
     }
 
-    // ring 里的数据不够时，剩余部分补静音，保证 DMA 连续跑。
-    for (sample_index = copied_samples; sample_index < total_samples; sample_index++)
+    /* renderer 不足或尚未注册时补静音，保证 DMA 连续运行。 */
+    for (sample_index = rendered_samples; sample_index < total_samples; sample_index++)
     {
         es8311_audio_dma_tx_buffer[offset_frames * ES8311_AUDIO_PLAYBACK_OUTPUT_CHANNELS + sample_index] = 0u;
     }
@@ -757,7 +695,6 @@ rt_err_t es8311_audio_init(void)
         return -RT_ERROR;
     }
 
-    es8311_audio_ctx.playback_channels = ES8311_AUDIO_PLAYBACK_OUTPUT_CHANNELS;
     es8311_audio_ctx.sample_rate = ES8311_AUDIO_DEFAULT_SAMPLE_RATE;
     es8311_audio_ctx.volume_0_127 = ES8311_AUDIO_DEFAULT_VOLUME;
     if (es8311_set_dac_volume(es8311_audio_map_volume_to_dac_reg(es8311_audio_ctx.volume_0_127)) != RT_EOK)
@@ -765,7 +702,7 @@ rt_err_t es8311_audio_init(void)
         LOG_W("es8311 default dac volume apply failed");
     }
     es8311_audio_ctx.inited = RT_TRUE;
-    es8311_audio_reset_playback_ring_locked();
+    es8311_audio_reset_playback_state_locked();
     es8311_audio_reset_capture_ring_locked();
     es8311_audio_clear_dma_buffers();
 
@@ -843,8 +780,6 @@ rt_err_t es8311_audio_configure(rt_uint32_t sample_rate, rt_uint8_t playback_cha
     }
 
     level = rt_hw_interrupt_disable();
-    es8311_audio_ctx.playback_channels = playback_channels;
-    es8311_audio_reset_playback_ring_locked();
     es8311_audio_reset_capture_ring_locked();
     rt_hw_interrupt_enable(level);
 
@@ -903,7 +838,6 @@ rt_err_t es8311_audio_set_run_mode(es8311_audio_run_mode_t mode)
     case ES8311_AUDIO_RUN_MODE_IDLE:
         es8311_audio_stop_playback();
         es8311_audio_stop_capture();
-        es8311_audio_flush_playback();
         es8311_audio_flush_capture();
         LOG_I("manual audio mode switched to idle");
         return RT_EOK;
@@ -931,7 +865,6 @@ rt_err_t es8311_audio_set_run_mode(es8311_audio_run_mode_t mode)
         }
 
         es8311_audio_stop_playback();
-        es8311_audio_flush_playback();
         // capture 目前固定回到默认采样率，先保证链路简单稳定。
         if (es8311_audio_i2s_reconfigure(ES8311_AUDIO_DEFAULT_SAMPLE_RATE) != RT_EOK)
         {
@@ -965,10 +898,14 @@ rt_err_t es8311_audio_start_playback(void)
         es8311_audio_stop_capture();
     }
 
+    if (es8311_audio_ctx.playback_running)
+    {
+        return RT_EOK;
+    }
+
     level = rt_hw_interrupt_disable();
     es8311_audio_ctx.playback_running = RT_TRUE;
-    // 播放不是一 start 就立刻起 DMA，而是先攒到阈值，
-    // 这样能减少刚起播时 ring 太浅导致的连续 underflow。
+    /* 播放先进入 pending，由 Mixer 根据当前音源的起播水位拉起 DMA。 */
     es8311_audio_ctx.playback_start_pending = RT_TRUE;
     es8311_audio_ctx.playback_underflow_notice_printed = RT_FALSE;
     rt_hw_interrupt_enable(level);
@@ -978,13 +915,12 @@ rt_err_t es8311_audio_start_playback(void)
         LOG_E("es8311_start_playback failed");
         level = rt_hw_interrupt_disable();
         es8311_audio_ctx.playback_running = RT_FALSE;
-        es8311_audio_reset_playback_ring_locked();
+        es8311_audio_reset_playback_state_locked();
         rt_hw_interrupt_enable(level);
         return -RT_ERROR;
     }
 
-    LOG_I("playback waiting PCM before DMA start, threshold_frames=%u",
-          ES8311_AUDIO_PLAYBACK_START_THRESHOLD_FRAMES);
+    LOG_I("playback waiting for mixer data before DMA start");
     return RT_EOK;
 }
 
@@ -999,7 +935,7 @@ void es8311_audio_stop_playback(void)
 
     level = rt_hw_interrupt_disable();
     es8311_audio_ctx.playback_running = RT_FALSE;
-    es8311_audio_reset_playback_ring_locked();
+    es8311_audio_reset_playback_state_locked();
     rt_hw_interrupt_enable(level);
 
     (void) es8311_stop_playback();
@@ -1009,228 +945,62 @@ void es8311_audio_stop_playback(void)
     }
 }
 
-void es8311_audio_flush_playback(void)
+rt_err_t es8311_audio_set_playback_renderer(es8311_audio_playback_renderer_t renderer,
+                                            void * context)
 {
     rt_base_t level;
 
+    if (!es8311_audio_ctx.inited || (renderer == RT_NULL))
+    {
+        return -RT_EINVAL;
+    }
+    if (es8311_audio_ctx.playback_running)
+    {
+        return -RT_EBUSY;
+    }
+
     level = rt_hw_interrupt_disable();
-    es8311_audio_reset_playback_ring_locked();
+    es8311_audio_ctx.playback_renderer = renderer;
+    es8311_audio_ctx.playback_renderer_context = context;
     rt_hw_interrupt_enable(level);
+    return RT_EOK;
 }
 
-rt_uint32_t es8311_audio_write_playback_checked(const rt_int16_t * pcm,
-                                                rt_uint32_t frames,
-                                                rt_uint8_t channels,
-                                                rt_uint32_t sample_rate,
-                                                es8311_audio_playback_write_status_t * status)
+rt_err_t es8311_audio_notify_playback_ready(void)
 {
-    rt_uint32_t frame_index;
-    rt_uint32_t start_frame;
-    rt_uint32_t frames_to_write;
-    rt_uint32_t written_frames;
-    rt_bool_t overflow_happened;
-    rt_bool_t log_overflow;
     rt_bool_t start_dma;
     rt_base_t level;
 
-    if (status != RT_NULL)
-    {
-        *status = ES8311_AUDIO_PLAYBACK_WRITE_OK;
-    }
-
-    if ((pcm == RT_NULL) || (frames == 0u))
-    {
-        if (status != RT_NULL)
-        {
-            *status = ES8311_AUDIO_PLAYBACK_WRITE_INVALID_ARGUMENT;
-        }
-        return 0u;
-    }
-
     if (!es8311_audio_ctx.inited)
     {
-        if (status != RT_NULL)
-        {
-            *status = ES8311_AUDIO_PLAYBACK_WRITE_NOT_INITED;
-        }
-        return 0u;
-    }
-
-    if (!es8311_audio_ctx.playback_running)
-    {
-        if (status != RT_NULL)
-        {
-            *status = ES8311_AUDIO_PLAYBACK_WRITE_NOT_RUNNING;
-        }
-        return 0u;
-    }
-
-    if ((channels == 0u) || (channels > ES8311_AUDIO_MAX_INPUT_CHANNELS))
-    {
-        if (status != RT_NULL)
-        {
-            *status = ES8311_AUDIO_PLAYBACK_WRITE_INVALID_FORMAT;
-        }
-        return 0u;
-    }
-
-    if (sample_rate != es8311_audio_ctx.sample_rate)
-    {
-        if (status != RT_NULL)
-        {
-            *status = ES8311_AUDIO_PLAYBACK_WRITE_SAMPLE_RATE_MISMATCH;
-        }
-        return 0u;
-    }
-
-    written_frames = 0u;
-    overflow_happened = RT_FALSE;
-    log_overflow = RT_FALSE;
-    start_dma = RT_FALSE;
-    start_frame = 0u;
-    frames_to_write = frames;
-    if (frames_to_write > ES8311_AUDIO_PLAYBACK_BUFFER_FRAMES)
-    {
-        // 单次写入过大时，只保留尾部最新一段，避免陈旧 PCM 拉高延迟。
-        start_frame = frames_to_write - ES8311_AUDIO_PLAYBACK_BUFFER_FRAMES;
-        frames_to_write = ES8311_AUDIO_PLAYBACK_BUFFER_FRAMES;
-        overflow_happened = RT_TRUE;
+        return -RT_ERROR;
     }
 
     level = rt_hw_interrupt_disable();
-    if (frames_to_write > 0u)
-    {
-        rt_uint32_t free_frames;
-
-        free_frames = (rt_uint32_t) ((ES8311_AUDIO_PLAYBACK_BUFFER_SAMPLES -
-                                      es8311_audio_ctx.playback_ring.level) /
-                                     ES8311_AUDIO_PLAYBACK_OUTPUT_CHANNELS);
-        if (free_frames < frames_to_write)
-        {
-            // ring 满了优先丢最旧的数据，保持“尽量播放最新 PCM”的策略。
-            es8311_audio_drop_oldest_playback_frames_locked(frames_to_write - free_frames);
-            overflow_happened = RT_TRUE;
-        }
-    }
-
-    for (frame_index = start_frame; frame_index < (start_frame + frames_to_write); frame_index++)
-    {
-        rt_int16_t left_sample;
-        rt_int16_t right_sample;
-
-        if ((ES8311_AUDIO_PLAYBACK_BUFFER_SAMPLES - es8311_audio_ctx.playback_ring.level) <
-            ES8311_AUDIO_PLAYBACK_OUTPUT_CHANNELS)
-        {
-            overflow_happened = RT_TRUE;
-            break;
-        }
-
-        if (channels == 1u)
-        {
-            left_sample = pcm[frame_index];
-            right_sample = left_sample;
-        }
-        else
-        {
-            left_sample = pcm[(rt_size_t) frame_index * channels];
-            right_sample = pcm[(rt_size_t) frame_index * channels + 1u];
-        }
-
-        es8311_audio_playback_buffer[es8311_audio_ctx.playback_ring.write] = left_sample;
-        es8311_audio_ctx.playback_ring.write++;
-        if (es8311_audio_ctx.playback_ring.write >= ES8311_AUDIO_PLAYBACK_BUFFER_SAMPLES)
-        {
-            es8311_audio_ctx.playback_ring.write = 0u;
-        }
-
-        es8311_audio_playback_buffer[es8311_audio_ctx.playback_ring.write] = right_sample;
-        es8311_audio_ctx.playback_ring.write++;
-        if (es8311_audio_ctx.playback_ring.write >= ES8311_AUDIO_PLAYBACK_BUFFER_SAMPLES)
-        {
-            es8311_audio_ctx.playback_ring.write = 0u;
-        }
-
-        es8311_audio_ctx.playback_ring.level += ES8311_AUDIO_PLAYBACK_OUTPUT_CHANNELS;
-        written_frames++;
-    }
-
-    if (es8311_audio_ctx.playback_start_pending &&
-        (es8311_audio_ctx.playback_ring.level / ES8311_AUDIO_PLAYBACK_OUTPUT_CHANNELS >=
-         ES8311_AUDIO_PLAYBACK_START_THRESHOLD_FRAMES))
-    {
-        // 达到起播水位后，再真正拉起 DMA。
-        es8311_audio_ctx.playback_start_pending = RT_FALSE;
-        es8311_audio_ctx.playback_underflow_notice_printed = RT_FALSE;
-        start_dma = RT_TRUE;
-    }
-
-    if (overflow_happened && !es8311_audio_ctx.playback_overflow_notice_printed)
-    {
-        es8311_audio_ctx.playback_overflow_notice_printed = RT_TRUE;
-        log_overflow = RT_TRUE;
-    }
-    rt_hw_interrupt_enable(level);
-
-    if (log_overflow)
-    {
-        LOG_W("playback ring overflow, drop audio frames");
-    }
-
+    start_dma = (rt_bool_t) (es8311_audio_ctx.playback_running &&
+                             es8311_audio_ctx.playback_start_pending &&
+                             (es8311_audio_ctx.playback_renderer != RT_NULL));
     if (start_dma)
     {
-        if (es8311_audio_start_playback_dma() != RT_EOK)
-        {
-            level = rt_hw_interrupt_disable();
-            es8311_audio_ctx.playback_running = RT_FALSE;
-            es8311_audio_reset_playback_ring_locked();
-            rt_hw_interrupt_enable(level);
-            if (status != RT_NULL)
-            {
-                *status = ES8311_AUDIO_PLAYBACK_WRITE_BUFFER_FULL;
-            }
-            return 0u;
-        }
+        es8311_audio_ctx.playback_start_pending = RT_FALSE;
+        es8311_audio_ctx.playback_underflow_notice_printed = RT_FALSE;
     }
+    rt_hw_interrupt_enable(level);
 
-    if ((written_frames == 0u) && (frames > 0u) && (status != RT_NULL))
+    if (!start_dma)
     {
-        *status = ES8311_AUDIO_PLAYBACK_WRITE_BUFFER_FULL;
+        return RT_EOK;
     }
 
-    return written_frames;
-}
-
-rt_uint32_t es8311_audio_write_playback(const rt_int16_t * pcm,
-                                        rt_uint32_t frames,
-                                        rt_uint8_t channels,
-                                        rt_uint32_t sample_rate)
-{
-    return es8311_audio_write_playback_checked(pcm, frames, channels, sample_rate, RT_NULL);
-}
-
-rt_uint32_t es8311_audio_get_playback_level_frames(void)
-{
-    rt_base_t level;
-    rt_uint32_t frames;
-
-    level = rt_hw_interrupt_disable();
-    frames = (rt_uint32_t) (es8311_audio_ctx.playback_ring.level / ES8311_AUDIO_PLAYBACK_OUTPUT_CHANNELS);
-    rt_hw_interrupt_enable(level);
-
-    return frames;
-}
-
-rt_uint32_t es8311_audio_get_playback_free_frames(void)
-{
-    rt_base_t level;
-    rt_uint32_t frames;
-
-    level = rt_hw_interrupt_disable();
-    frames = (rt_uint32_t) ((ES8311_AUDIO_PLAYBACK_BUFFER_SAMPLES - es8311_audio_ctx.playback_ring.level) /
-                            ES8311_AUDIO_PLAYBACK_OUTPUT_CHANNELS);
-    rt_hw_interrupt_enable(level);
-
-    return frames;
+    if (es8311_audio_start_playback_dma() != RT_EOK)
+    {
+        level = rt_hw_interrupt_disable();
+        es8311_audio_ctx.playback_running = RT_FALSE;
+        es8311_audio_reset_playback_state_locked();
+        rt_hw_interrupt_enable(level);
+        return -RT_ERROR;
+    }
+    return RT_EOK;
 }
 
 rt_uint32_t es8311_audio_get_sample_rate(void)
@@ -1494,154 +1264,4 @@ void DMA1_Stream4_IRQHandler(void)
     rt_interrupt_enter();
     HAL_DMA_IRQHandler(&es8311_audio_ctx.hdma_i2s2_tx);
     rt_interrupt_leave();
-}
-
-
-rt_err_t boot_prompt_play_once(void)
-{
-#define BOOT_PROMPT_SAMPLE_RATE          44100u
-#define BOOT_PROMPT_CHANNELS            1u
-#define BOOT_PROMPT_CHUNK_FRAMES        512u
-#define BOOT_PROMPT_TAIL_SILENCE_FRAMES 2048u
-#define BOOT_PROMPT_STOP_LEVEL_FRAMES   512u
-#define BOOT_PROMPT_WAIT_MS             2u
-#define BOOT_PROMPT_VOLUME_PERCENT      0   //10
-
-    static const rt_int16_t boot_prompt_silence[BOOT_PROMPT_CHUNK_FRAMES] = {0};
-    rt_int16_t scaled_pcm[BOOT_PROMPT_CHUNK_FRAMES];
-    rt_uint32_t offset = 0u;
-    rt_uint32_t tail_offset = 0u;
-    rt_bool_t playback_started = RT_FALSE;
-    rt_err_t result = RT_EOK;
-
-    if (es8311_audio_configure(BOOT_PROMPT_SAMPLE_RATE, BOOT_PROMPT_CHANNELS) != RT_EOK)
-    {
-        result = -RT_ERROR;
-        goto exit;
-    }
-
-    if (es8311_audio_start_playback() != RT_EOK)
-    {
-        result = -RT_ERROR;
-        goto exit;
-    }
-    playback_started = RT_TRUE;
-
-    while (offset < boot_prompt_pcm_len)
-    {
-        rt_uint32_t free_frames;
-        rt_uint32_t frames;
-        rt_uint32_t written;
-        rt_uint32_t frame_index;
-        es8311_audio_playback_write_status_t status;
-
-        free_frames = es8311_audio_get_playback_free_frames();
-        if (free_frames == 0u)
-        {
-            rt_thread_mdelay(BOOT_PROMPT_WAIT_MS);
-            continue;
-        }
-
-        frames = boot_prompt_pcm_len - offset;
-        if (frames > BOOT_PROMPT_CHUNK_FRAMES)
-        {
-            frames = BOOT_PROMPT_CHUNK_FRAMES;
-        }
-        if (frames > free_frames)
-        {
-            frames = free_frames;
-        }
-
-        for (frame_index = 0u; frame_index < frames; frame_index++)
-        {
-            scaled_pcm[frame_index] = (rt_int16_t) (((rt_int32_t) boot_prompt_pcm[offset + frame_index] *
-                                                     BOOT_PROMPT_VOLUME_PERCENT) / 100);
-        }
-
-        written = es8311_audio_write_playback_checked(scaled_pcm,
-                                                      frames,
-                                                      BOOT_PROMPT_CHANNELS,
-                                                      BOOT_PROMPT_SAMPLE_RATE,
-                                                      &status);
-        if (written == 0u)
-        {
-            if (status == ES8311_AUDIO_PLAYBACK_WRITE_BUFFER_FULL)
-            {
-                rt_thread_mdelay(BOOT_PROMPT_WAIT_MS);
-                continue;
-            }
-
-            result = -RT_ERROR;
-            goto stop_playback;
-        }
-
-        offset += written;
-    }
-
-    while (tail_offset < BOOT_PROMPT_TAIL_SILENCE_FRAMES)
-    {
-        rt_uint32_t free_frames;
-        rt_uint32_t frames;
-        rt_uint32_t written;
-        es8311_audio_playback_write_status_t status;
-
-        free_frames = es8311_audio_get_playback_free_frames();
-        if (free_frames == 0u)
-        {
-            rt_thread_mdelay(BOOT_PROMPT_WAIT_MS);
-            continue;
-        }
-
-        frames = BOOT_PROMPT_TAIL_SILENCE_FRAMES - tail_offset;
-        if (frames > BOOT_PROMPT_CHUNK_FRAMES)
-        {
-            frames = BOOT_PROMPT_CHUNK_FRAMES;
-        }
-        if (frames > free_frames)
-        {
-            frames = free_frames;
-        }
-
-        written = es8311_audio_write_playback_checked(boot_prompt_silence,
-                                                      frames,
-                                                      BOOT_PROMPT_CHANNELS,
-                                                      BOOT_PROMPT_SAMPLE_RATE,
-                                                      &status);
-        if (written == 0u)
-        {
-            if (status == ES8311_AUDIO_PLAYBACK_WRITE_BUFFER_FULL)
-            {
-                rt_thread_mdelay(BOOT_PROMPT_WAIT_MS);
-                continue;
-            }
-
-            result = -RT_ERROR;
-            goto stop_playback;
-        }
-
-        tail_offset += written;
-    }
-
-    while (es8311_audio_get_playback_level_frames() > BOOT_PROMPT_STOP_LEVEL_FRAMES)
-    {
-        rt_thread_mdelay(BOOT_PROMPT_WAIT_MS);
-    }
-
-stop_playback:
-    if (playback_started)
-    {
-        es8311_audio_stop_playback();
-        es8311_audio_flush_playback();
-    }
-
-exit:
-#undef BOOT_PROMPT_SAMPLE_RATE
-#undef BOOT_PROMPT_CHANNELS
-#undef BOOT_PROMPT_CHUNK_FRAMES
-#undef BOOT_PROMPT_TAIL_SILENCE_FRAMES
-#undef BOOT_PROMPT_STOP_LEVEL_FRAMES
-#undef BOOT_PROMPT_WAIT_MS
-#undef BOOT_PROMPT_VOLUME_PERCENT
-
-    return result;
 }

@@ -7,7 +7,7 @@
 
 #include <string.h>
 
-#include "es8311_audio.h"
+#include "audio_mixer.h"
 #include "btstack_util.h"
 #include "classic/avdtp.h"
 #include "classic/btstack_sbc.h"
@@ -27,26 +27,24 @@ static rt_bool_t bt_a2dp_audio_first_pcm_logged = RT_FALSE;
 static rt_bool_t bt_a2dp_audio_parse_error_logged = RT_FALSE;
 static rt_bool_t bt_a2dp_audio_fragmented_logged = RT_FALSE;
 static rt_bool_t bt_a2dp_audio_backpressure_logged = RT_FALSE;
-static es8311_audio_playback_write_status_t bt_a2dp_audio_last_write_status = ES8311_AUDIO_PLAYBACK_WRITE_OK;
+static audio_mixer_write_status_t bt_a2dp_audio_last_write_status = AUDIO_MIXER_WRITE_OK;
 
-static const char * bt_a2dp_audio_write_status_name(es8311_audio_playback_write_status_t status)
+static const char * bt_a2dp_audio_write_status_name(audio_mixer_write_status_t status)
 {
     switch (status)
     {
-    case ES8311_AUDIO_PLAYBACK_WRITE_OK:
+    case AUDIO_MIXER_WRITE_OK:
         return "ok";
-    case ES8311_AUDIO_PLAYBACK_WRITE_INVALID_ARGUMENT:
+    case AUDIO_MIXER_WRITE_INVALID_ARGUMENT:
         return "invalid_argument";
-    case ES8311_AUDIO_PLAYBACK_WRITE_NOT_INITED:
+    case AUDIO_MIXER_WRITE_NOT_INITED:
         return "not_inited";
-    case ES8311_AUDIO_PLAYBACK_WRITE_NOT_RUNNING:
-        return "not_running";
-    case ES8311_AUDIO_PLAYBACK_WRITE_INVALID_FORMAT:
+    case AUDIO_MIXER_WRITE_SOURCE_INACTIVE:
+        return "source_inactive";
+    case AUDIO_MIXER_WRITE_INVALID_FORMAT:
         return "invalid_format";
-    case ES8311_AUDIO_PLAYBACK_WRITE_SAMPLE_RATE_MISMATCH:
+    case AUDIO_MIXER_WRITE_SAMPLE_RATE_MISMATCH:
         return "sample_rate_mismatch";
-    case ES8311_AUDIO_PLAYBACK_WRITE_BUFFER_FULL:
-        return "buffer_full";
     default:
         return "unknown";
     }
@@ -59,7 +57,7 @@ static void bt_a2dp_audio_handle_pcm(int16_t * data,
                                      void * context)
 {
     rt_uint32_t written_frames;
-    es8311_audio_playback_write_status_t write_status;
+    audio_mixer_write_status_t write_status;
 
     UNUSED(context);
 
@@ -72,32 +70,33 @@ static void bt_a2dp_audio_handle_pcm(int16_t * data,
               sample_rate);
     }
 
-    // 解码层只负责把 PCM 写入 ES8311 统一音频会话层。
-    written_frames = es8311_audio_write_playback_checked(data,
-                                                         (rt_uint32_t) num_samples,
-                                                         (rt_uint8_t) num_channels,
-                                                         (rt_uint32_t) sample_rate,
-                                                         &write_status);
+    /* 解码层只把 PCM 写入背景音源，混音和 ES8311 输出由 Mixer 统一负责。 */
+    written_frames = audio_mixer_write(AUDIO_MIXER_SOURCE_BACKGROUND,
+                                       data,
+                                       (rt_uint32_t) num_samples,
+                                       (rt_uint8_t) num_channels,
+                                       (rt_uint32_t) sample_rate,
+                                       &write_status);
     if ((written_frames == 0u) && (num_samples > 0))
     {
         if (write_status != bt_a2dp_audio_last_write_status)
         {
-            LOG_W("ES8311 playback rejected PCM: reason=%s, samples=%d, channels=%d, sample_rate=%d, running=%d, es8311_rate=%u, level=%u",
+            LOG_W("audio mixer rejected A2DP PCM: reason=%s, samples=%d, channels=%d, sample_rate=%d, active=%d, mixer_rate=%u, level=%u",
                   bt_a2dp_audio_write_status_name(write_status),
                   num_samples,
                   num_channels,
                   sample_rate,
-                  es8311_audio_is_playback_running(),
-                  es8311_audio_get_sample_rate(),
-                  es8311_audio_get_playback_level_frames());
+                  audio_mixer_source_is_active(AUDIO_MIXER_SOURCE_BACKGROUND),
+                  AUDIO_MIXER_SAMPLE_RATE,
+                  audio_mixer_get_source_level_frames(AUDIO_MIXER_SOURCE_BACKGROUND));
             bt_a2dp_audio_last_write_status = write_status;
         }
         return;
     }
 
-    if (write_status == ES8311_AUDIO_PLAYBACK_WRITE_OK)
+    if (write_status == AUDIO_MIXER_WRITE_OK)
     {
-        bt_a2dp_audio_last_write_status = ES8311_AUDIO_PLAYBACK_WRITE_OK;
+        bt_a2dp_audio_last_write_status = AUDIO_MIXER_WRITE_OK;
     }
 }
 
@@ -194,7 +193,7 @@ rt_err_t bt_a2dp_audio_init(void)
     bt_a2dp_audio_parse_error_logged = RT_FALSE;
     bt_a2dp_audio_fragmented_logged = RT_FALSE;
     bt_a2dp_audio_backpressure_logged = RT_FALSE;
-    bt_a2dp_audio_last_write_status = ES8311_AUDIO_PLAYBACK_WRITE_OK;
+    bt_a2dp_audio_last_write_status = AUDIO_MIXER_WRITE_OK;
     return RT_EOK;
 }
 
@@ -214,7 +213,7 @@ void bt_a2dp_audio_reset(void)
     bt_a2dp_audio_parse_error_logged = RT_FALSE;
     bt_a2dp_audio_fragmented_logged = RT_FALSE;
     bt_a2dp_audio_backpressure_logged = RT_FALSE;
-    bt_a2dp_audio_last_write_status = ES8311_AUDIO_PLAYBACK_WRITE_OK;
+    bt_a2dp_audio_last_write_status = AUDIO_MIXER_WRITE_OK;
 }
 
 void bt_a2dp_audio_process_media_packet(uint8_t local_seid, const uint8_t * packet, uint16_t size)
@@ -262,14 +261,15 @@ void bt_a2dp_audio_process_media_packet(uint8_t local_seid, const uint8_t * pack
         return;
     }
 
-    if (es8311_audio_get_playback_level_frames() >= BT_A2DP_AUDIO_BACKPRESSURE_LEVEL)
+    if (audio_mixer_get_source_level_frames(AUDIO_MIXER_SOURCE_BACKGROUND) >=
+        BT_A2DP_AUDIO_BACKPRESSURE_LEVEL)
     {
         if (!bt_a2dp_audio_backpressure_logged)
         {
             bt_a2dp_audio_backpressure_logged = RT_TRUE;
             LOG_W("A2DP media packet dropped by playback backpressure, level=%u, free=%u",
-                  es8311_audio_get_playback_level_frames(),
-                  es8311_audio_get_playback_free_frames());
+                  audio_mixer_get_source_level_frames(AUDIO_MIXER_SOURCE_BACKGROUND),
+                  audio_mixer_get_source_free_frames(AUDIO_MIXER_SOURCE_BACKGROUND));
         }
         return;
     }
@@ -280,4 +280,3 @@ void bt_a2dp_audio_process_media_packet(uint8_t local_seid, const uint8_t * pack
                                      sbc_payload,
                                      (int) sbc_payload_size);
 }
-

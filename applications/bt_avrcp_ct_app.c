@@ -64,6 +64,9 @@ static uint8_t bt_avrcp_ct_command_read_index = 0u;
 static uint8_t bt_avrcp_ct_command_write_index = 0u;
 static uint8_t bt_avrcp_ct_command_count = 0u;
 static rt_bool_t bt_avrcp_ct_command_callback_pending = RT_FALSE;
+/* BTstack 的 AVRCP 控制通道一次只能处理一条 vendor command。 */
+static rt_bool_t bt_avrcp_ct_now_playing_pending = RT_FALSE;
+static const char *bt_avrcp_ct_now_playing_reason = "unknown";
 
 /* 绝对音量会话：默认 false，收到对端 SetAbsoluteVolume 后置 true。 */
 static rt_bool_t bt_avrcp_ct_absolute_volume_active = RT_FALSE;
@@ -297,6 +300,8 @@ static void bt_avrcp_ct_reset_session_state(void)
     bt_avrcp_ct_song_length_ms = 0u;
     bt_avrcp_ct_song_position_ms = 0u;
     bt_avrcp_ct_clear_now_playing_text();
+    bt_avrcp_ct_now_playing_pending = RT_FALSE;
+    bt_avrcp_ct_now_playing_reason = "unknown";
 
     level = rt_hw_interrupt_disable();
     bt_avrcp_ct_abs_volume_pending_delta = 0;
@@ -304,7 +309,8 @@ static void bt_avrcp_ct_reset_session_state(void)
     rt_hw_interrupt_enable(level);
 }
 
-static void bt_avrcp_ct_request_now_playing_info(const char * reason);
+static void bt_avrcp_ct_queue_now_playing_info(const char * reason);
+static void bt_avrcp_ct_pump_pending_queries(void);
 
 static void bt_avrcp_ct_update_playback_state(uint8_t play_status, const char * source)
 {
@@ -326,7 +332,7 @@ static void bt_avrcp_ct_update_playback_state(uint8_t play_status, const char * 
         /* 仅在“开始播放”时拉元数据：unknown/paused/stopped -> playing */
         if (new_state == BT_AVRCP_CT_PLAYBACK_STATE_PLAYING)
         {
-            bt_avrcp_ct_request_now_playing_info("start_playing");
+            bt_avrcp_ct_queue_now_playing_info("start_playing");
         }
     }
 
@@ -347,9 +353,14 @@ static void bt_avrcp_ct_update_playback_state(uint8_t play_status, const char * 
     }
 }
 
-/* 主动拉取 Now Playing：歌名/歌手/专辑/总时长等。
- * 仅在 start_playing / track_changed 两条路径调用；对端不支持时失败属正常。 */
-static void bt_avrcp_ct_request_now_playing_info(const char * reason)
+static void bt_avrcp_ct_queue_now_playing_info(const char * reason)
+{
+    bt_avrcp_ct_now_playing_pending = RT_TRUE;
+    bt_avrcp_ct_now_playing_reason = (reason != RT_NULL) ? reason : "unknown";
+}
+
+/* 若 0x0c 表示控制通道正忙，则保留 pending，等下一次 AVRCP 事件再重试。 */
+static void bt_avrcp_ct_pump_pending_queries(void)
 {
     uint8_t status;
 
@@ -358,19 +369,30 @@ static void bt_avrcp_ct_request_now_playing_info(const char * reason)
         return;
     }
 
+    if (!bt_avrcp_ct_now_playing_pending)
+    {
+        return;
+    }
+
     status = avrcp_controller_get_now_playing_info(bt_avrcp_ct_cid);
+    if (status == ERROR_CODE_COMMAND_DISALLOWED)
+    {
+        return;
+    }
+
+    bt_avrcp_ct_now_playing_pending = RT_FALSE;
     if (status != ERROR_CODE_SUCCESS)
     {
         LOG_W("AVRCP get_now_playing_info failed, status=0x%02x, cid=0x%04x, reason=%s",
               status,
               bt_avrcp_ct_cid,
-              (reason != RT_NULL) ? reason : "unknown");
+              bt_avrcp_ct_now_playing_reason);
         return;
     }
 
     LOG_I("AVRCP get_now_playing_info requested, cid=0x%04x, reason=%s",
           bt_avrcp_ct_cid,
-          (reason != RT_NULL) ? reason : "unknown");
+          bt_avrcp_ct_now_playing_reason);
 }
 
 static void bt_avrcp_ct_sync_remote_playback_state(void)
@@ -425,18 +447,7 @@ static void bt_avrcp_ct_sync_remote_playback_state(void)
         LOG_I("AVRCP track changed notification requested, cid=0x%04x", bt_avrcp_ct_cid);
     }
 
-    status = avrcp_controller_get_play_status(bt_avrcp_ct_cid); //主动查询播放状态
-    if (status != ERROR_CODE_SUCCESS)
-    {
-        bt_avrcp_ct_set_op_state(BT_AVRCP_CT_OP_STATE_IDLE);
-        LOG_W("AVRCP get_play_status request failed, status=0x%02x, cid=0x%04x",
-              status,
-              bt_avrcp_ct_cid);
-        return;
-    }
-
-    bt_avrcp_ct_set_op_state(BT_AVRCP_CT_OP_STATE_WAIT_INITIAL_STATUS); //操作等待状态
-    LOG_I("AVRCP get_play_status requested, cid=0x%04x", bt_avrcp_ct_cid);
+    /* 状态与进度以 bfe99a6 的通知路径为准，避免主动查询的过渡态覆盖通知。 */
 }
 
 static const char * bt_avrcp_ct_operation_name(uint8_t operation_id)
@@ -957,6 +968,8 @@ static rt_err_t bt_avrcp_ct_post_abs_volume_delta(int16_t delta)
 
 void btstack_event_avrcp_controller_handler(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size)
 {
+    rt_bool_t pump_now_playing;
+
     UNUSED(channel);
     UNUSED(size);
 
@@ -970,6 +983,7 @@ void btstack_event_avrcp_controller_handler(uint8_t packet_type, uint16_t channe
     }
 
     unsigned int event = hci_event_avrcp_meta_get_subevent_code(packet);
+    pump_now_playing = RT_FALSE;
     switch (event) 
     {
     case AVRCP_SUBEVENT_CONNECTION_ESTABLISHED:  // AVRCP 连接建立
@@ -1065,6 +1079,7 @@ void btstack_event_avrcp_controller_handler(uint8_t packet_type, uint16_t channe
               bt_avrcp_ct_operation_name(operation_id),
               operation_id,
               avrcp_subevent_operation_complete_get_status(packet));
+        pump_now_playing = RT_TRUE;
         break;
     }
 
@@ -1097,6 +1112,7 @@ void btstack_event_avrcp_controller_handler(uint8_t packet_type, uint16_t channe
               bt_avrcp_ct_play_status_name(play_status),
               play_status);
         bt_avrcp_ct_update_playback_state(play_status, "play_status");
+        pump_now_playing = RT_TRUE;
         break;
     }
 
@@ -1118,6 +1134,7 @@ void btstack_event_avrcp_controller_handler(uint8_t packet_type, uint16_t channe
         {
             bt_avrcp_ct_set_playback_notify_enabled((rt_bool_t) ((status == ERROR_CODE_SUCCESS) && (enabled != 0u)));
         }
+        pump_now_playing = RT_TRUE;
         break;
     }
 
@@ -1132,6 +1149,7 @@ void btstack_event_avrcp_controller_handler(uint8_t packet_type, uint16_t channe
               bt_avrcp_ct_play_status_name(play_status),
               play_status);
         bt_avrcp_ct_update_playback_state(play_status, "notification");
+        pump_now_playing = RT_TRUE;
         break;
     }
 
@@ -1149,8 +1167,9 @@ void btstack_event_avrcp_controller_handler(uint8_t packet_type, uint16_t channe
         bt_avrcp_ct_set_song_length_ms(0u);
         bt_avrcp_ct_set_song_position_ms(0u);
         bt_avrcp_ct_clear_now_playing_text();
-        /* 换歌主路径：当前曲目变了就重新拉歌名/歌手/总时长。 */
-        bt_avrcp_ct_request_now_playing_info("track_changed");
+        /* 保持 bfe99a6 的切歌时序：只拉元数据，播放状态和进度由通知更新。 */
+        bt_avrcp_ct_queue_now_playing_info("track_changed");
+        pump_now_playing = RT_TRUE;
         break;
     }
 
@@ -1162,6 +1181,7 @@ void btstack_event_avrcp_controller_handler(uint8_t packet_type, uint16_t channe
         bt_avrcp_ct_log_playback_progress(position_ms,
                                           avrcp_subevent_notification_playback_pos_changed_get_command_type(packet),
                                           avrcp_subevent_notification_playback_pos_changed_get_avrcp_cid(packet));
+        pump_now_playing = RT_TRUE;
         break;
     }
 
@@ -1334,6 +1354,7 @@ void btstack_event_avrcp_controller_handler(uint8_t packet_type, uint16_t channe
               avrcp_subevent_now_playing_info_done_get_avrcp_cid(packet),
               avrcp_subevent_now_playing_info_done_get_command_type(packet),
               avrcp_subevent_now_playing_info_done_get_status(packet));
+        pump_now_playing = RT_TRUE;
         break;
 
     case AVRCP_SUBEVENT_GET_CAPABILITY_EVENT_ID:  // 对端支持的通知 event id
@@ -1377,6 +1398,11 @@ void btstack_event_avrcp_controller_handler(uint8_t packet_type, uint16_t channe
     default:
         LOG_D("AVRCP meta event ignored, subevent=0x%02x", event);
         break;
+    }
+
+    if (pump_now_playing)
+    {
+        bt_avrcp_ct_pump_pending_queries();
     }
 }
 

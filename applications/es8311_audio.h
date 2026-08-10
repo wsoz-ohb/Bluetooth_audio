@@ -28,16 +28,9 @@ typedef enum
     ES8311_AUDIO_RUN_MODE_CAPTURE,
 } es8311_audio_run_mode_t;
 
-typedef enum
-{
-    ES8311_AUDIO_PLAYBACK_WRITE_OK = 0,
-    ES8311_AUDIO_PLAYBACK_WRITE_INVALID_ARGUMENT,
-    ES8311_AUDIO_PLAYBACK_WRITE_NOT_INITED,
-    ES8311_AUDIO_PLAYBACK_WRITE_NOT_RUNNING,
-    ES8311_AUDIO_PLAYBACK_WRITE_INVALID_FORMAT,
-    ES8311_AUDIO_PLAYBACK_WRITE_SAMPLE_RATE_MISMATCH,
-    ES8311_AUDIO_PLAYBACK_WRITE_BUFFER_FULL,
-} es8311_audio_playback_write_status_t;
+typedef rt_uint32_t (*es8311_audio_playback_renderer_t)(rt_int16_t * pcm,
+                                                       rt_uint32_t frames,
+                                                       void * context);
 
 rt_err_t es8311_audio_init(void);
 rt_bool_t es8311_audio_is_inited(void);
@@ -48,18 +41,9 @@ const char * es8311_audio_run_mode_name(es8311_audio_run_mode_t mode);
 
 rt_err_t es8311_audio_start_playback(void);
 void es8311_audio_stop_playback(void);
-void es8311_audio_flush_playback(void);
-rt_uint32_t es8311_audio_write_playback_checked(const rt_int16_t * pcm,
-                                                rt_uint32_t frames,
-                                                rt_uint8_t channels,
-                                                rt_uint32_t sample_rate,
-                                                es8311_audio_playback_write_status_t * status);
-rt_uint32_t es8311_audio_write_playback(const rt_int16_t * pcm,
-                                        rt_uint32_t frames,
-                                        rt_uint8_t channels,
-                                        rt_uint32_t sample_rate);
-rt_uint32_t es8311_audio_get_playback_level_frames(void);
-rt_uint32_t es8311_audio_get_playback_free_frames(void);
+rt_err_t es8311_audio_set_playback_renderer(es8311_audio_playback_renderer_t renderer,
+                                            void * context);
+rt_err_t es8311_audio_notify_playback_ready(void);
 rt_uint32_t es8311_audio_get_sample_rate(void);
 rt_bool_t es8311_audio_is_playback_running(void);
 
@@ -76,8 +60,6 @@ rt_uint32_t es8311_audio_get_capture_level_frames(void);
 rt_uint32_t es8311_audio_get_capture_drop_frames(void);
 rt_bool_t es8311_audio_get_capture_format(es8311_audio_capture_format_t * format);
 rt_bool_t es8311_audio_is_capture_running(void);
-
-rt_err_t boot_prompt_play_once(void);
 
 #if defined(__cplusplus)
 }

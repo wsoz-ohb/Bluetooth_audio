@@ -16,6 +16,7 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 
+#include "audio_mixer.h"
 #include "es8311_audio.h"
 #include "fs_app.h"
 
@@ -384,8 +385,7 @@ static void uart_pcm_rx_stop_audio(void)
 {
     if (uart_pcm_rx_audio_started)
     {
-        es8311_audio_stop_playback();
-        es8311_audio_flush_playback();
+        audio_mixer_source_stop(AUDIO_MIXER_SOURCE_VOICE);
         uart_pcm_rx_audio_started = RT_FALSE;
     }
 }
@@ -446,20 +446,23 @@ static rt_uint32_t uart_pcm_rx_write(const rt_uint8_t *data, rt_size_t bytes)
 
     if (!uart_pcm_rx_audio_started)
     {
-        if (es8311_audio_configure(UART_PCM_RX_SAMPLE_RATE, 1u) != RT_EOK ||
-            es8311_audio_start_playback() != RT_EOK)
+        if (audio_mixer_source_start(AUDIO_MIXER_SOURCE_VOICE,
+                                     UART_PCM_RX_SAMPLE_RATE,
+                                     1u) != RT_EOK)
         {
-            LOG_E("start ES8311 playback for UART3 PCM failed");
+            LOG_E("start mixer voice source for UART3 PCM failed");
             return 0u;
         }
         uart_pcm_rx_audio_started = RT_TRUE;
-        LOG_I("UART3 reply PCM playback started");
+        LOG_I("UART3 reply PCM mixer source started");
     }
 
-    return es8311_audio_write_playback(uart_pcm_rx_pcm_buffer,
-                                       frames,
-                                       1u,
-                                       UART_PCM_RX_SAMPLE_RATE);
+    return audio_mixer_write(AUDIO_MIXER_SOURCE_VOICE,
+                             uart_pcm_rx_pcm_buffer,
+                             frames,
+                             1u,
+                             UART_PCM_RX_SAMPLE_RATE,
+                             RT_NULL);
 }
 
 static void uart_pcm_rx_thread_entry(void *parameter)
@@ -1111,6 +1114,10 @@ void uart_send_pcm_stop(void)
         return;
     }
 
-    /* PTT 松手后直接进入等待回复状态，不需要额外的 MSH 命令。 */
+}
+
+void uart_send_pcm_start_reply_rx(void)
+{
+    /* 由 PTT 状态机在退出 CAPTURE 后调用，避免首包回复被后续 IDLE 切换清掉。 */
     uart_pcm_rx_enable();
 }

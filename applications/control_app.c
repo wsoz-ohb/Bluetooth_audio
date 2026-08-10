@@ -23,6 +23,7 @@
 #include "keyboard_driver.h"
 #include "bt_avrcp_ct_app.h"
 #include "bt_a2dp_sink_app.h"
+#include "audio_mixer.h"
 #include "es8311_audio.h"
 #include "es8311_driver.h"
 #include "uart_send_pcm.h"
@@ -116,8 +117,7 @@ static void control_ptt_wait_playback_quiet(void)
         /* 对端已 pause 但本地还在播尾巴,主动停本地,避免占 I2S */
         if ((pb != BT_AVRCP_CT_PLAYBACK_STATE_PLAYING) && local_playing)
         {
-            es8311_audio_stop_playback();
-            es8311_audio_flush_playback();
+            audio_mixer_stop_all();
         }
 
         rt_thread_mdelay(CONTROL_PTT_PAUSE_POLL_MS);
@@ -127,8 +127,7 @@ static void control_ptt_wait_playback_quiet(void)
     if (es8311_audio_is_playback_running())
     {
         LOG_W("PTT: pause wait timeout, force stop local playback");
-        es8311_audio_stop_playback();
-        es8311_audio_flush_playback();
+        audio_mixer_stop_all();
     }
 }
 
@@ -236,6 +235,8 @@ static rt_err_t control_ptt_start(void)
         return RT_EOK;
     }
 
+    /* TX/RX 音源都应已停；这里再统一清一次 Mixer，保证 CAPTURE 独占 I2S。 */
+    audio_mixer_stop_all();
     err = es8311_audio_set_run_mode(ES8311_AUDIO_RUN_MODE_CAPTURE);
     if (err != RT_EOK)
     {
@@ -291,6 +292,9 @@ static void control_ptt_stop(void)
         (void)bt_a2dp_sink_set_local_media_enabled(RT_TRUE);
         g_ptt_media_gate_closed = RT_FALSE;
     }
+
+    /* 必须在退出 CAPTURE/恢复本地播放之后再打开回复 RX。 */
+    uart_send_pcm_start_reply_rx();
 
     if (need_resume && bt_avrcp_ct_is_connected())
     {

@@ -13,6 +13,7 @@
 #define DBG_LVL DBG_WARNING
 #include <rtdbg.h>
 #include "bt_app.h"
+#include "audio_mixer.h"
 #include "es8311_audio.h"
 #include <control_app.h>
 #include "gui_manager.h"
@@ -35,6 +36,10 @@ int main(void)
     if (es8311_audio_init() != RT_EOK)
     {
         LOG_E("es8311_audio_init failed");
+    }
+    if (audio_mixer_init() != RT_EOK)
+    {
+        LOG_E("audio_mixer_init failed");
     }
     boot_prompt_play_once();
     /* 提示音是同步阻塞播放的，返回即代表播放完成。

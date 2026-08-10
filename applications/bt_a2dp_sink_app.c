@@ -6,6 +6,7 @@
 #include "bt_a2dp_sink_app.h"
 
 #include "bt_a2dp_audio.h"
+#include "audio_mixer.h"
 #include "bt_config.h"
 #include "es8311_audio.h"
 #include "btstack_event.h"
@@ -33,9 +34,9 @@ static avdtp_stream_endpoint_t * bt_app_a2dp_sink_sep = RT_NULL;
 static uint8_t bt_app_a2dp_sink_sdp_record[BT_APP_A2DP_SINK_SDP_RECORD_SIZE];
 
 // 这个 capability 描述本机 Sink 目前接受的 SBC 能力范围。
-// 这里先只放最常见的 44.1/48 kHz + Stereo/Joint Stereo，后面再按业务扩展。
+// Mixer、AI PCM 和采集链路统一使用 44.1 kHz，避免运行时重采样。
 static const uint8_t bt_app_a2dp_sbc_capabilities[BT_APP_A2DP_SINK_CODEC_INFORMATION_SIZE] = {
-    (uint8_t) ((((uint8_t) AVDTP_SBC_44100 | (uint8_t) AVDTP_SBC_48000) << 4) |
+    (uint8_t) (((uint8_t) AVDTP_SBC_44100 << 4) |
                ((uint8_t) AVDTP_SBC_STEREO | (uint8_t) AVDTP_SBC_JOINT_STEREO)),
     (uint8_t) ((((uint8_t) AVDTP_SBC_BLOCK_LENGTH_4 | (uint8_t) AVDTP_SBC_BLOCK_LENGTH_8 |
                  (uint8_t) AVDTP_SBC_BLOCK_LENGTH_12 | (uint8_t) AVDTP_SBC_BLOCK_LENGTH_16) << 4) |
@@ -70,30 +71,16 @@ static rt_bool_t bt_app_a2dp_suspend_in_progress = RT_FALSE;
 
 static rt_bool_t bt_app_a2dp_ensure_playback_started(const char * reason)
 {
-    if (es8311_audio_is_playback_running())
-    {
-        bt_app_a2dp_playback_error_logged = RT_FALSE;
-        return RT_TRUE;
-    }
-
-    if (es8311_audio_configure(bt_app_a2dp_sample_rate, 2u) != RT_EOK)
+    if (audio_mixer_source_start(AUDIO_MIXER_SOURCE_BACKGROUND,
+                                 bt_app_a2dp_sample_rate,
+                                 2u) != RT_EOK)
     {
         if (!bt_app_a2dp_playback_error_logged)
         {
             bt_app_a2dp_playback_error_logged = RT_TRUE;
-            LOG_E("es8311_audio_configure failed before playback, reason=%s, sample_rate=%u",
+            LOG_E("start A2DP mixer source failed, reason=%s, sample_rate=%u",
                   reason,
                   bt_app_a2dp_sample_rate);
-        }
-        return RT_FALSE;
-    }
-
-    if (es8311_audio_start_playback() != RT_EOK)
-    {
-        if (!bt_app_a2dp_playback_error_logged)
-        {
-            bt_app_a2dp_playback_error_logged = RT_TRUE;
-            LOG_E("es8311_audio_start_playback failed, reason=%s", reason);
         }
         return RT_FALSE;
     }
@@ -106,8 +93,7 @@ static rt_bool_t bt_app_a2dp_ensure_playback_started(const char * reason)
 static void bt_app_a2dp_stop_playback(void)
 {
     bt_app_a2dp_playback_error_logged = RT_FALSE;
-    es8311_audio_stop_playback();
-    es8311_audio_flush_playback();
+    audio_mixer_source_stop(AUDIO_MIXER_SOURCE_BACKGROUND);
 }
 
 static void bt_app_a2dp_sink_media_handler(uint8_t local_seid, uint8_t * packet, uint16_t size)
@@ -190,9 +176,9 @@ static void bt_app_handle_a2dp_meta_event(uint8_t * packet)
 
         bt_a2dp_audio_reset();
         bt_app_a2dp_sample_rate = sample_rate;
-        if (es8311_audio_configure(sample_rate, 2u) != RT_EOK)
+        if (sample_rate != AUDIO_MIXER_SAMPLE_RATE)
         {
-            LOG_W("es8311_audio_configure failed");
+            LOG_E("unsupported A2DP sample rate for mixer: %u", sample_rate);
         }
         LOG_I("A2DP SBC config: freq=%u, mode=%u, blocks=%u, subbands=%u, alloc=%u, bitpool=%u-%u",
               sample_rate,
@@ -490,6 +476,7 @@ rt_err_t bt_a2dp_sink_set_local_media_enabled(rt_bool_t enabled)
     if (!bt_app_a2dp_local_media_enabled)
     {
         bt_app_a2dp_media_allowed = RT_FALSE;
+        audio_mixer_source_stop(AUDIO_MIXER_SOURCE_BACKGROUND);
         return RT_EOK;
     }
 
@@ -517,15 +504,11 @@ rt_err_t bt_a2dp_sink_restore_local_playback(void)
         es8311_audio_flush_capture();
     }
 
-    if (es8311_audio_configure(bt_app_a2dp_sample_rate, 2u) != RT_EOK)
+    if (audio_mixer_source_start(AUDIO_MIXER_SOURCE_BACKGROUND,
+                                 bt_app_a2dp_sample_rate,
+                                 2u) != RT_EOK)
     {
-        LOG_E("restore A2DP playback config failed, sample_rate=%u", bt_app_a2dp_sample_rate);
-        return -RT_ERROR;
-    }
-
-    if (es8311_audio_set_run_mode(ES8311_AUDIO_RUN_MODE_PLAYBACK) != RT_EOK)
-    {
-        LOG_E("restore local playback mode failed");
+        LOG_E("restore A2DP mixer source failed, sample_rate=%u", bt_app_a2dp_sample_rate);
         return -RT_ERROR;
     }
 
