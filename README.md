@@ -1,6 +1,6 @@
 # Bluetooth Audio 当前架构说明
 
-> 更新时间：2026-08-10
+> 更新时间：2026-08-11
 > 主控：STM32F407VG + RT-Thread 4.1.1  
 > 蓝牙：外挂 ESP32-WROOM-32E（Controller）+ 工程内 `BT-STACK`（Host）  
 > 当前定位：**蓝牙音箱 + PTT AI 对话**（A2DP/AI PCM 混音 + AVRCP + GUI）
@@ -130,7 +130,7 @@ LVGL 线程
 | `bt_app.c` | Host 初始化编排；只注册 A2DP Sink + AVRCP |
 | `bt_a2dp_sink_app.c` | SEP / SDP / stream 事件；media 包交给解码层；suspend/resume 查询 |
 | `bt_a2dp_audio.c` | RTP + SBC 解码；写 Mixer 背景音源；满缓冲回压丢包 |
-| `bt_avrcp_ct_app.c` | CT 控制 + TG 侧绝对音量；Now Playing 缓存；状态机防重入 |
+| `bt_avrcp_ct_app.c` | CT 控制 + TG 侧绝对音量；绝对音量只调 A2DP 背景源；Now Playing 缓存；状态机防重入 |
 
 AVRCP 对外只读接口（GUI 用）：
 
@@ -147,7 +147,8 @@ AVRCP 对外只读接口（GUI 用）：
 
 - 背景音源：A2DP stereo PCM
 - 语音音源：香橙派 AI mono PCM
-- 单路时 1.0 原样直通；双路时 AI 保持 1.0，背景音在约 20ms 内降到 0.2
+- A2DP Absolute Volume 在 Mixer 内映射为背景软件增益，不再衰减最终混音结果
+- 单路时 AI 保持原样；双路时背景音在约 5ms 内降到 0.05
 - AI PCM 暂时断流或结束后，背景音约 250ms 平滑恢复，最终输出使用 int16 饱和保护
 
 `es8311_audio.c` 负责硬件会话：
@@ -155,7 +156,7 @@ AVRCP 对外只读接口（GUI 用）：
 - 模式：`IDLE` / `PLAYBACK` / `CAPTURE`（互斥）
 - Mixer 背景 ring 放在 **CCM**；采集 ring 和 AI ring 放在主 RAM
 - I2S DMA 双缓冲必须在 **主 RAM**
-- 本地音量 0~127，与 AVRCP Absolute Volume 对齐
+- ES8311 保持最终主增益；AVRCP 0~127 音量由 Mixer 的 A2DP 背景源处理
 - `boot_prompt_play_once()`：开机提示音
 
 ### 4.3 本地控制
@@ -228,6 +229,7 @@ filesystem  5 ~ 16MB    littlefs 预留（业务未挂载产品化）
   → bt_a2dp_audio_process_media_packet()
        RTP/SBC 解析 → SBC decode
   → audio_mixer_write(BACKGROUND)
+       Absolute Volume 背景增益
   → background ring (CCM)
   → audio_mixer_render_stereo()
   → 过启动阈值后 I2S TX DMA
@@ -243,7 +245,7 @@ filesystem  5 ~ 16MB    littlefs 预留（业务未挂载产品化）
 松开 PTT
   → 退出 CAPTURE、恢复 A2DP、uart3 切 RX
   → AI mono PCM → audio_mixer_write(VOICE)
-  → 与 BACKGROUND Duck 混音 → ES8311 DAC
+  → 与 BACKGROUND Duck 混音 → ES8311 固定主增益 → DAC
 ```
 
 ### 6.3 控制与元数据

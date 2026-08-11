@@ -5,6 +5,8 @@
  */
 #include "audio_mixer.h"
 
+#include <rthw.h>
+
 #include "audio_define.h"
 #include "es8311_audio.h"
 
@@ -19,11 +21,35 @@
 #define AUDIO_MIXER_VOICE_START_FRAMES          1024u
 
 #define AUDIO_MIXER_Q15_ONE                     32768
-#define AUDIO_MIXER_DUCK_BACKGROUND_GAIN_Q15    6554  /* 0.20 */
-#define AUDIO_MIXER_DUCK_ATTACK_FRAMES          ((AUDIO_MIXER_SAMPLE_RATE * 20u) / 1000u)
+#define AUDIO_MIXER_DUCK_BACKGROUND_GAIN_Q15    1638  /* 0.05 */
+#define AUDIO_MIXER_DUCK_ATTACK_FRAMES          ((AUDIO_MIXER_SAMPLE_RATE * 5u) / 1000u)
 #define AUDIO_MIXER_DUCK_RELEASE_FRAMES         ((AUDIO_MIXER_SAMPLE_RATE * 250u) / 1000u)
 #define AUDIO_MIXER_DUCK_ATTACK_STEP_Q15        ((AUDIO_MIXER_Q15_ONE + AUDIO_MIXER_DUCK_ATTACK_FRAMES - 1u) / AUDIO_MIXER_DUCK_ATTACK_FRAMES)
 #define AUDIO_MIXER_DUCK_RELEASE_STEP_Q15       ((AUDIO_MIXER_Q15_ONE + AUDIO_MIXER_DUCK_RELEASE_FRAMES - 1u) / AUDIO_MIXER_DUCK_RELEASE_FRAMES)
+
+/*
+ * 音量 1~127 保持原 ES8311 曲线：先映射到 DAC 0x00~0xBF，再按每级
+ * 0.5dB 换算成 Q15；音量 0 使用数字静音，避免最低 Q15 产生负向 1 LSB。
+ */
+static const rt_uint16_t audio_mixer_background_gain_q15[AUDIO_MIXER_VOLUME_MAX + 1u] =
+{
+        0u,     1u,     1u,     1u,     1u,     1u,     1u,     1u,
+        1u,     1u,     1u,     1u,     2u,     2u,     2u,     2u,
+        2u,     2u,     3u,     3u,     3u,     3u,     4u,     4u,
+        4u,     5u,     5u,     6u,     6u,     7u,     7u,     8u,
+        9u,     9u,    10u,    11u,    12u,    13u,    15u,    16u,
+       17u,    18u,    21u,    22u,    25u,    26u,    29u,    31u,
+       35u,    37u,    41u,    44u,    49u,    52u,    58u,    62u,
+       69u,    73u,    82u,    87u,    98u,   104u,   116u,   123u,
+      138u,   146u,   164u,   174u,   195u,   207u,   232u,   246u,
+      276u,   292u,   328u,   347u,   389u,   413u,   463u,   490u,
+      550u,   583u,   654u,   693u,   777u,   823u,   924u,   978u,
+     1098u,  1163u,  1305u,  1382u,  1550u,  1642u,  1843u,  1952u,
+     2190u,  2320u,  2603u,  2757u,  3093u,  3277u,  3677u,  3894u,
+     4370u,  4629u,  5193u,  5501u,  6172u,  6538u,  7336u,  7771u,
+     8719u,  9235u, 10362u, 10976u, 12315u, 13045u, 14637u, 15504u,
+    17396u, 18427u, 20675u, 21900u, 24573u, 26029u, 29205u, 32768u,
+};
 
 typedef struct
 {
@@ -39,6 +65,8 @@ typedef struct
 {
     rt_bool_t inited;
     rt_int32_t duck_q15;
+    rt_int32_t background_gain_q15;
+    rt_uint8_t background_volume_0_127;
     audio_mixer_ring_t source[AUDIO_MIXER_SOURCE_COUNT];
 } audio_mixer_context_t;
 
@@ -136,6 +164,8 @@ rt_err_t audio_mixer_init(void)
     }
 
     rt_memset(&audio_mixer_ctx, 0, sizeof(audio_mixer_ctx));
+    audio_mixer_ctx.background_volume_0_127 = AUDIO_MIXER_VOLUME_MAX;
+    audio_mixer_ctx.background_gain_q15 = AUDIO_MIXER_Q15_ONE;
     audio_mixer_ctx.source[AUDIO_MIXER_SOURCE_BACKGROUND].capacity_frames = AUDIO_MIXER_BACKGROUND_BUFFER_FRAMES;
     audio_mixer_ctx.source[AUDIO_MIXER_SOURCE_VOICE].capacity_frames = AUDIO_MIXER_VOICE_BUFFER_FRAMES;
 
@@ -286,6 +316,49 @@ rt_bool_t audio_mixer_source_is_active(audio_mixer_source_t source)
     active = audio_mixer_ctx.source[source].active;
     rt_hw_interrupt_enable(level);
     return active;
+}
+
+rt_err_t audio_mixer_set_background_volume(rt_uint8_t volume_0_127)
+{
+    rt_int32_t gain_q15;
+    rt_base_t level;
+
+    if (!audio_mixer_ctx.inited)
+    {
+        return -RT_ERROR;
+    }
+
+    if (volume_0_127 > AUDIO_MIXER_VOLUME_MAX)
+    {
+        volume_0_127 = AUDIO_MIXER_VOLUME_MAX;
+    }
+    gain_q15 = audio_mixer_background_gain_q15[volume_0_127];
+
+    level = rt_hw_interrupt_disable();
+    audio_mixer_ctx.background_volume_0_127 = volume_0_127;
+    audio_mixer_ctx.background_gain_q15 = gain_q15;
+    rt_hw_interrupt_enable(level);
+
+    LOG_I("background volume=%u/127, gain_q15=%d",
+          volume_0_127,
+          gain_q15);
+    return RT_EOK;
+}
+
+rt_uint8_t audio_mixer_get_background_volume(void)
+{
+    rt_uint8_t volume;
+    rt_base_t level;
+
+    if (!audio_mixer_ctx.inited)
+    {
+        return AUDIO_MIXER_VOLUME_MAX;
+    }
+
+    level = rt_hw_interrupt_disable();
+    volume = audio_mixer_ctx.background_volume_0_127;
+    rt_hw_interrupt_enable(level);
+    return volume;
 }
 
 rt_uint32_t audio_mixer_write(audio_mixer_source_t source,
@@ -493,6 +566,7 @@ rt_uint32_t audio_mixer_render_stereo(rt_int16_t * pcm, rt_uint32_t frames, void
         rt_int32_t background_left;
         rt_int32_t background_right;
         rt_int32_t voice_sample;
+        rt_int32_t background_duck_gain_q15;
         rt_int32_t background_gain_q15;
         rt_int32_t mixed_left;
         rt_int32_t mixed_right;
@@ -549,10 +623,12 @@ rt_uint32_t audio_mixer_render_stereo(rt_int16_t * pcm, rt_uint32_t frames, void
             }
         }
 
-        /* 单路时保持 1.0 原样直通；双路时只压低背景音，语音保持 1.0。 */
-        background_gain_q15 = AUDIO_MIXER_Q15_ONE -
+        /* A2DP 音量和 Duck 都只作用于背景音，AI 语音不受手机音量影响。 */
+        background_duck_gain_q15 = AUDIO_MIXER_Q15_ONE -
             ((audio_mixer_ctx.duck_q15 *
               (AUDIO_MIXER_Q15_ONE - AUDIO_MIXER_DUCK_BACKGROUND_GAIN_Q15)) >> 15);
+        background_gain_q15 =
+            (audio_mixer_ctx.background_gain_q15 * background_duck_gain_q15) >> 15;
 
         mixed_left = ((background_left * background_gain_q15) >> 15) +
                      voice_sample;

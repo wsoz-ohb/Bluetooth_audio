@@ -157,6 +157,11 @@ static void bt_app_handle_a2dp_meta_event(uint8_t * packet)
         }
         
         bt_app_a2dp_cid = a2dp_subevent_signaling_connection_established_get_a2dp_cid(packet);
+        /* 新 A2DP 会话默认按相对音量处理；收到 SetAbsoluteVolume 后再覆盖。 */
+        if (audio_mixer_set_background_volume(AUDIO_MIXER_VOLUME_MAX) != RT_EOK)
+        {
+            LOG_W("reset A2DP background volume failed, cid=0x%04x", bt_app_a2dp_cid);
+        }
         LOG_I("A2DP signaling connected, remote=%s, cid=0x%04x",
               bd_addr_to_str(remote_addr),
               bt_app_a2dp_cid);

@@ -47,7 +47,7 @@ rt_err_t es8311_audio_notify_playback_ready(void);
 rt_uint32_t es8311_audio_get_sample_rate(void);
 rt_bool_t es8311_audio_is_playback_running(void);
 
-/* 本地播放音量，范围 0~127，与 AVRCP Absolute Volume 对齐。 */
+/* 最终播放主音量，范围 0~127，会同时作用于所有混音源。 */
 rt_err_t es8311_audio_set_volume(rt_uint8_t volume_0_127);
 rt_uint8_t es8311_audio_get_volume(void);
 

@@ -14,6 +14,7 @@ extern "C" {
 #endif
 
 #define AUDIO_MIXER_SAMPLE_RATE 44100u
+#define AUDIO_MIXER_VOLUME_MAX  127u
 
 typedef enum
 {
@@ -40,6 +41,10 @@ rt_err_t audio_mixer_source_start(audio_mixer_source_t source,
 void audio_mixer_source_stop(audio_mixer_source_t source);
 void audio_mixer_stop_all(void);
 rt_bool_t audio_mixer_source_is_active(audio_mixer_source_t source);
+
+/* A2DP 背景音量，范围 0~127，与 AVRCP Absolute Volume 对齐。 */
+rt_err_t audio_mixer_set_background_volume(rt_uint8_t volume_0_127);
+rt_uint8_t audio_mixer_get_background_volume(void);
 
 rt_uint32_t audio_mixer_write(audio_mixer_source_t source,
                               const rt_int16_t * pcm,

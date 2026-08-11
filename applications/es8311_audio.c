@@ -659,10 +659,10 @@ static void es8311_audio_tx_dma_callback(DMA_HandleTypeDef * hdma)
 }
 
 
-/* AVRCP absolute volume 0~127 映射到 ES8311 DAC 寄存器。
+/* 最终播放主音量 0~127 映射到 ES8311 DAC 寄存器。
  * 0x00 最小，0xBF 约 0dB；超过 0xBF 的正增益先不用。
- * 默认用满量程：相对音量时对端改 PCM 幅值，本地增益必须拉满，
- * 否则电脑/手机音量拉满也会偏小；绝对音量会在连接后覆盖此值。 */
+ * 默认保持满量程；AVRCP 音量在 Mixer 的 A2DP 背景源上处理，
+ * 避免手机音量同时衰减 AI 回复语音。 */
 #define ES8311_AUDIO_VOLUME_MAX           127u
 #define ES8311_AUDIO_DAC_REG_MAX          0xBFu
 #define ES8311_AUDIO_DEFAULT_VOLUME       127u
@@ -754,7 +754,7 @@ rt_err_t es8311_audio_set_volume(rt_uint8_t volume_0_127)
     }
 
     es8311_audio_ctx.volume_0_127 = volume_0_127;
-    LOG_I("local playback volume=%u/127, dac_reg=0x%02x",
+    LOG_I("playback master volume=%u/127, dac_reg=0x%02x",
           volume_0_127,
           dac_reg);
     return RT_EOK;

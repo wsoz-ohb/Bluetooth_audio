@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 #include "bt_avrcp_ct_app.h"
-#include "es8311_audio.h"
+#include "audio_mixer.h"
 #include "bt_config.h"
 #include "btstack_event.h"
 #include "btstack_run_loop.h"
@@ -829,16 +829,15 @@ static void bt_avrcp_ct_apply_absolute_volume(uint16_t avrcp_cid, uint8_t volume
 {
     volume = (uint8_t)(volume & 0x7Fu);
 
-    /* 对端开始用绝对音量后，旋钮改走本地增益路径。 */
-    bt_avrcp_ct_set_absolute_volume_active(RT_TRUE);
-
-    /* 手机 SetAbsoluteVolume 时，BTstack 已写入 target_absolute_volume；
-     * 这里只负责把 0~127 映射到本地 ES8311 增益。 */
-    if (es8311_audio_set_volume(volume) != RT_EOK)
+    /* 手机音量只作用于 A2DP 背景源，避免混音后的 AI 语音被一起衰减。 */
+    if (audio_mixer_set_background_volume(volume) != RT_EOK)
     {
         LOG_W("apply absolute volume failed, cid=0x%04x, volume=%u/127", avrcp_cid, volume);
         return;
     }
+
+    /* 本地增益生效后再切换旋钮路径，避免失败状态下误走绝对音量。 */
+    bt_avrcp_ct_set_absolute_volume_active(RT_TRUE);
 
     LOG_I("absolute volume applied, cid=0x%04x, volume=%u/127 (%u percent)",
           avrcp_cid,
@@ -864,18 +863,18 @@ static void bt_avrcp_ct_apply_local_absolute_volume_delta(int16_t delta)
         return;
     }
 
-    volume = (int32_t)es8311_audio_get_volume() + (int32_t)delta;
+    volume = (int32_t)audio_mixer_get_background_volume() + (int32_t)delta;
     if (volume < 0)
     {
         volume = 0;
     }
-    else if (volume > 127)
+    else if (volume > AUDIO_MIXER_VOLUME_MAX)
     {
-        volume = 127;
+        volume = AUDIO_MIXER_VOLUME_MAX;
     }
     new_volume = (uint8_t)volume;
 
-    if (es8311_audio_set_volume(new_volume) != RT_EOK)
+    if (audio_mixer_set_background_volume(new_volume) != RT_EOK)
     {
         LOG_W("local absolute volume set failed, volume=%u/127", new_volume);
         return;
@@ -1023,17 +1022,18 @@ void btstack_event_avrcp_controller_handler(uint8_t packet_type, uint16_t channe
             LOG_I("AVRCP TG VOLUME_CHANGED supported, cid=0x%04x", bt_avrcp_ct_cid);
         }
         /* 仅写入 TG 上下文初始绝对音量，不主动通知对端。 */
-        if (avrcp_target_adjust_absolute_volume(bt_avrcp_ct_cid, es8311_audio_get_volume()) != ERROR_CODE_SUCCESS)
+        if (avrcp_target_adjust_absolute_volume(bt_avrcp_ct_cid,
+                                                audio_mixer_get_background_volume()) != ERROR_CODE_SUCCESS)
         {
             LOG_W("AVRCP TG seed absolute volume failed, cid=0x%04x, volume=%u",
                   bt_avrcp_ct_cid,
-                  es8311_audio_get_volume());
+                  audio_mixer_get_background_volume());
         }
         else
         {
             LOG_I("AVRCP TG absolute volume seeded, cid=0x%04x, volume=%u/127",
                   bt_avrcp_ct_cid,
-                  es8311_audio_get_volume());
+                  audio_mixer_get_background_volume());
         }
         bt_avrcp_ct_sync_remote_playback_state();   //同步远程播放状态
         break;
