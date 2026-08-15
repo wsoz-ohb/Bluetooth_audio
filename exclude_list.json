@@ -1,0 +1,1 @@
+[{"config_name":"Debug","exclude_files":["packages/LVGL-v8.3.11/src/draw/sdl","packages/LVGL-v8.3.11/src/draw/nxp","packages/LVGL-v8.3.11/src/draw/renesas","packages/LVGL-v8.3.11/src/draw/swm341_dma2d","packages/LVGL-v8.3.11/src/draw/arm2d"]}]
