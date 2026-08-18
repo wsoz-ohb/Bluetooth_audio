@@ -27,6 +27,12 @@ rt_size_t bt_spp_rx_dropped_bytes(void);
 /* 查询 SPP RFCOMM 通道是否已经建立。 */
 rt_bool_t bt_spp_is_connected(void);
 
+/*
+ * 异步排队发送 RFCOMM 数据。数据会在 BTstack 线程收到
+ * RFCOMM_EVENT_CAN_SEND_NOW 后实际发送，返回 0 表示未能完整入队。
+ */
+rt_size_t bt_spp_tx_write(const rt_uint8_t *buffer, rt_size_t size);
+
 #if defined(__cplusplus)
 }
 #endif

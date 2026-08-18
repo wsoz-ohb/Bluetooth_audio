@@ -5,7 +5,7 @@
 /* Program Entry, set to mark it as "used" and avoid gc */
 MEMORY
 {
-    ROM (rx) : ORIGIN = 0x08000000, LENGTH =  1024k /* 1024K flash */
+    ROM (rx) : ORIGIN = 0x08010000, LENGTH =  960k /* App: Sector 4~11 */
     RAM (rw) : ORIGIN = 0x20000000, LENGTH =  128k /* 128K sram */
     CCM (rw) : ORIGIN = 0x10000000, LENGTH =  64k  /* 64K core-coupled RAM, CPU only, no DMA */
 }

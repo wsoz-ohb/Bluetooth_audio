@@ -169,6 +169,11 @@ void hw_board_init(char *clock_src, int32_t clock_src_freq, int32_t clock_target
     extern void rt_hw_systick_init(void);
     extern void clk_init(char *clk_source, int source_freq, int target_freq);
 
+    /* CMSIS SystemInit restores VTOR to FLASH_BASE; this APP starts at ROM_START. */
+    SCB->VTOR = ROM_START;
+    __DSB();
+    __ISB();
+
 #ifdef BSP_SCB_ENABLE_I_CACHE
     /* Enable I-Cache---------------------------------------------------------*/
     SCB_EnableICache();
@@ -204,4 +209,3 @@ void hw_board_init(char *clock_src, int32_t clock_src_freq, int32_t clock_target
 #endif
 
 }
-

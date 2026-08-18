@@ -19,12 +19,16 @@
 #include "gui_manager.h"
 #include "sfud_app.h"
 #include "fs_app.h"
+#include "../mycomponents/easy_bootloader_app/boot_ota_port.h"
 
 int main(void)
 {
+    rt_bool_t health_check_ready = RT_TRUE;
+
     if (sfud_app_init() != RT_EOK)
     {
         LOG_E("sfud_app_init failed");
+        health_check_ready = RT_FALSE;
     }
 
     /* Flash 就绪后挂 littlefs；失败不阻断音箱主链，只是 PTT 无法落盘 */
@@ -36,10 +40,12 @@ int main(void)
     if (es8311_audio_init() != RT_EOK)
     {
         LOG_E("es8311_audio_init failed");
+        health_check_ready = RT_FALSE;
     }
     if (audio_mixer_init() != RT_EOK)
     {
         LOG_E("audio_mixer_init failed");
+        health_check_ready = RT_FALSE;
     }
     boot_prompt_play_once();
     /* 提示音是同步阻塞播放的，返回即代表播放完成。
@@ -49,15 +55,30 @@ int main(void)
     if (bt__init() != RT_EOK)
     {
         LOG_E("bt__init failed");
+        health_check_ready = RT_FALSE;
+    }
+
+    if (boot_ota_init() != RT_EOK)
+    {
+        LOG_E("boot_ota_init failed");
+        health_check_ready = RT_FALSE;
     }
 
     if (control_app_init() != RT_EOK)
     {
            LOG_E("control_app_init failed");
+           health_check_ready = RT_FALSE;
     }
 
+    if (health_check_ready)
+    {
+        /* 核心服务稳定后再确认试运行镜像，避免新版本过早失去回滚机会。 */
+        boot_ota_schedule_confirmation(3000U);
+    }
+    rt_kprintf("hello world，This is Haha2!\r\n");
     while (1)
     {
+        boot_ota_poll();
         rt_thread_mdelay(10);
     }
 

@@ -1,402 +1,194 @@
-# Bluetooth Audio 当前架构说明
+# Bluetooth Audio
 
-> 更新时间：2026-08-11
+> 更新时间：2026-08-18  
 > 主控：STM32F407VG + RT-Thread 4.1.1  
-> 蓝牙：外挂 ESP32-WROOM-32E（Controller）+ 工程内 `BT-STACK`（Host）  
-> 当前定位：**蓝牙音箱 + PTT AI 对话**（A2DP/AI PCM 混音 + AVRCP + GUI）
+> 蓝牙控制器：ESP32-WROOM-32E  
+> 音频编解码器：ES8311  
+> 显示：ST7789 320×240  
+> AI 协处理器：Orange Pi 5（RK3588，部署资料位于 `E:\香橙派模型部署`）
 
-本文只描述**已经在代码里落地**的架构与能力，不把“计划做”的事写成已完成。
+这是一个以 RT-Thread 为基础的 Bluetooth Classic 音箱固件。工程已经完成蓝牙播放、AVRCP 播控、LVGL 播放界面、板载 Flash 字库、PTT 语音链路和 SPP OTA 应用侧接入。README 只记录当前代码中已经存在的实现；没有接入的协议或工具会明确标注。
 
----
+## 功能概览
 
-## 1. 目标与范围
+- **A2DP Sink**：手机或电脑发送 SBC，BT-STACK 解码为 44.1 kHz PCM，经 Mixer、I2S2 DMA 和 ES8311 播放。
+- **AVRCP Controller/Target**：按键和编码器控制播放、暂停、上一首、下一首和音量；读取歌名、歌手、时长、进度与播放状态。
+- **LVGL 播放页**：Welcome 启动页、中文歌名/歌手、进度条、状态文案和旋转唱片动画。
+- **PTT AI 音频链路**：长按 PC9 采集 ES8311 麦克风 PCM，经 USART3 发送给香橙派；松开后 USART3 接收回复裸 PCM，进入 Mixer 的语音通道播放。背景蓝牙音乐在回复期间自动 Duck。
+- **W25Q128 Flash**：SFUD + FAL；`font` 分区运行时读取 ZBFT 中文字库，`filesystem` 分区挂载 littlefs 保存录音文件。
+- **SPP OTA**：Classic RFCOMM SPP 接收固件，校验 CRC32 后写入备用槽；配合 Easy Bootloader 完成安装、试运行、确认和回滚。
+- **启动健康确认**：应用初始化成功后延时确认试运行镜像；异常复位不会立即丢失回滚机会。
 
-### 1.1 已完成的主目标
-
-- 被手机 / PC 发现并连接（Bluetooth Classic）
-- **A2DP Sink**：接收 SBC → 解码 PCM → `I2S2 + DMA + ES8311` 播放
-- **AVRCP Controller / Target**：
-  - 本地按键 / 编码器控制对端播放、暂停、切歌、音量
-  - 拉取 Now Playing（歌名 / 歌手 / 时长 / 进度）
-  - 绝对音量同步（支持时）
-- **LVGL 播放页 GUI**（320×240 横屏）
-  - Welcome 启动页 → Main 播放页
-  - 歌名 / 歌手中文显示、进度条、矢量旋转圆盘、状态文案
-- **板载 W25Q128**：SFUD + FAL 分区；`font` 分区存放 ZBFT 点阵字库
-- 开机提示音与 Welcome 淡出同步
-- 长按 PTT 采集 PCM，经 `uart3` 与香橙派完成 AI 对话
-- A2DP 背景音与 AI 回复统一进入 `audio_mixer`，AI 回复期间自动 Duck
-
-### 1.2 明确未做 / 未产品化
-
-| 项 | 状态 |
-|---|---|
-| HFP / HSP 通话 | 未接 |
-| BLE 业务 | 配置关闭 |
-| A2DP SBC fragmentation 重组 | 未实现（分片包直接丢） |
-| littlefs 挂载与业务读写 | 包已引入、分区已规划，业务未产品化 |
-| OTA（fw_a / fw_b） | 仅分区预留 |
-| 触摸屏播控 | 未做（播控走按键/编码器） |
-| SPI DMA 刷屏 | 未做（draw buf 在 CCM，DMA 不可见） |
-| AI UART 帧协议 | 当前仍为 44.1kHz mono s16le 裸流，以空闲超时判断回复结束 |
-| 全双工回声消除 | 未做；PTT 采集期间播放与采集保持互斥 |
-
----
-
-## 2. 总体分层
+## 系统架构
 
 ```text
 手机 / PC
-    |  Classic: A2DP (SBC) + AVRCP
-    v
-+------------------------------------------------------------------+
-| STM32F407 + RT-Thread                                            |
-|                                                                  |
-|  applications/                                                   |
-|    main.c                 启动编排                               |
-|    bt_app.c               BT Host + profile 注册                 |
-|    bt_a2dp_sink_app.c     A2DP Sink 事件 / media 转发            |
-|    bt_a2dp_audio.c        RTP/SBC 解码 → PCM                     |
-|    audio_mixer.c          A2DP/AI 双音源 ring、Duck 与饱和混音   |
-|    bt_avrcp_ct_app.c      AVRCP CT/TG、元数据、音量              |
-|    es8311_audio.c         Codec、采集会话与 I2S DMA 输出         |
-|    control_app.c          按键 + 旋转编码器 → AVRCP              |
-|    lcd_app / mylvgl_app   ST7789 + LVGL 显示端口                 |
-|    gui_manager / welcome / main   界面管理与播放页               |
-|    sfud_app / font_app / font_update   Flash / 字库              |
-|                                                                  |
-|  mycomponents/BT-STACK/   Host 栈 + RT-Thread port + ESP32 chipset|
-|  mycomponents/es8311/     Codec 寄存器驱动                       |
-|  mycomponents/LCD/        ST7789 面板驱动                        |
-|  mycomponents/keyboard/   按键状态机                             |
-|  packages/LVGL-v8.3.11    GUI                                    |
-|  packages/littlefs-v2.5.0 已引入，业务未挂载产品化               |
-+------------------------------------------------------------------+
-    | HCI H4 UART (uart2, 921600, 流控)
-    v
-ESP32-WROOM-32E  (Bluetooth Controller)
-    |
-    | 播放: SBC→PCM→I2S2/DMA→ES8311 DAC
-    | 显示: SPI1 → ST7789 + W25Q128（共总线，独立 CS）
+  ├─ A2DP (SBC) ─┐
+  └─ AVRCP       │
+                 v
+        ESP32 Controller
+        HCI H4 / uart2 / 921600 / RTS-CTS
+                 |
+                 v
+STM32F407 + RT-Thread + BT-STACK Host
+  ├─ SBC 解码 ──> audio_mixer ──> I2S2 DMA ──> ES8311 ──> 喇叭
+  ├─ AVRCP 元数据 ──> LVGL / ST7789
+  ├─ PTT 采集 ──> uart3 / 2Mbps ──> Orange Pi 5
+  ├─ uart3 回复 PCM ──> audio_mixer VOICE ──> ES8311
+  └─ SPP OTA ──> fw_a/fw_b + BCB ──> 独立 Bootloader 安装
 ```
 
----
+### 启动顺序
 
-## 3. 启动链
-
-### 3.1 真正入口
-
-- 用户态入口：`applications/main.c` 的 `main()`
-- `cubemx/Src/main.c` 的 `__WEAK main` 会被覆盖
-- CubeMX 主要提供：时钟、`hi2s2` 等句柄、MSP 初始化
-
-### 3.2 应用启动顺序（与代码一致）
+`applications/main.c` 是应用入口，CubeMX 只提供时钟、MSP 和外设句柄。实际顺序为：
 
 ```text
-main()
-  → sfud_app_init()              // W25Q128：GPIO/JEDEC/SFUD/清写保护
-  → es8311_audio_init()          // Codec + I2S 会话层
-  → boot_prompt_play_once()      // 同步阻塞提示音
-  → mylvgl_notify_boot_prompt_done()  // 通知 Welcome 可淡出
-  → bt__init()
-       → btstack_port_init()
-       → bt_a2dp_sink_service_init()
-       → bt_avrcp_ct_service_init()
-       → btstack_port_start_thread()
-  → control_app_init()           // 按键 + 编码器线程
-  → while (1) rt_thread_mdelay(10)
+sfud_app_init
+  -> fs_app_init（littlefs 挂载，失败不阻断音箱主链）
+  -> es8311_audio_init / audio_mixer_init
+  -> boot_prompt_play_once
+  -> bt__init（A2DP Sink、AVRCP、SPP）
+  -> boot_ota_init
+  -> control_app_init
+  -> 延时 3 秒确认试运行镜像
+  -> 主循环每 10 ms 调用 boot_ota_poll
 ```
 
-### 3.3 LVGL 启动（组件自动拉起，不在 main 里手写）
+LVGL 线程由组件自动启动，创建显示端口、字库索引和 Welcome/Main 页面。
+
+## OTA 说明
+
+### 分区与地址
+
+片外 W25Q128（16 MiB）分区如下：
+
+| 分区 | 偏移 | 大小 | 用途 |
+| --- | ---: | ---: | --- |
+| `font` | `0x000000` | 2 MiB | ZBFT 中文字库 |
+| `fw_a` | `0x200000` | 2 MiB | OTA 下载槽 A |
+| `fw_b` | `0x400000` | 1 MiB | OTA 下载槽 B / 回退副本 |
+| `filesystem` | `0x500000` | 11 MiB | littlefs |
+
+BCB 位于 STM32 片内 Flash `0x0800C000`，大小 16 KiB。应用链接地址是 `0x08010000`，应用最大镜像大小为 960 KiB；独立 Bootloader 必须使用同一地址、镜像头和 BCB 定义。
+
+### SPP OTA 流程
+
+1. 手机或 PC 通过 Classic SPP 连接服务 `WSOZ SPP`（RFCOMM channel 1）。
+2. 发送 `55 AA FF EE 55 55` 开始会话。
+3. 按 Easy Bootloader APP 协议发送带长度、校验和和尾标记的数据帧；固件写入当前确认槽之外的备用槽。
+4. 发送结束帧（包含大端 `version` 和 `build_date`）；应用重新校验 payload CRC32、镜像头和目标地址，追加 BCB `UPDATE_READY`。
+5. 设备复位后由 Bootloader 安装并进入 `TRIAL`；应用核心服务稳定 3 秒后调用确认，失败则按最大尝试次数回滚。
+
+版本查询命令：
 
 ```text
-LVGL 线程
-  → lv_port_disp_init()          // lcd_app_init + draw buf + flush
-  → lv_user_gui_init()
-       → font_app_init()         // FAL "font" 分区，索引表进 RAM
-       → gui_manager_init()
-            → Welcome
-            → (提示音完成 + 打字动画结束) → Main 播放页
+查询版本：55 AA FF DD 55 55
+查询日期：55 AA FF CC 55 55
 ```
 
----
+当前应用启动时会从 BCB 的确认/试运行槽读取镜像头，因此版本和日期不再默认显示为 0。成功安装后，串口应返回类似 `version:1` 和 `2026-08-18`。
 
-## 4. 模块职责
+本仓库包含 `mycomponents/easy_bootloader_app/` 的应用侧端口；独立 Bootloader 工程仍以 `D:\Code_Warehouse\easy_bootloader_project` 为参考/配套工程。烧录前必须确认两边的链接地址、分区、镜像格式完全一致。
 
-### 4.1 蓝牙
+## PTT 与香橙派
 
-| 文件 | 职责 |
-|---|---|
-| `bt_app.c` | Host 初始化编排；只注册 A2DP Sink + AVRCP |
-| `bt_a2dp_sink_app.c` | SEP / SDP / stream 事件；media 包交给解码层；suspend/resume 查询 |
-| `bt_a2dp_audio.c` | RTP + SBC 解码；写 Mixer 背景音源；满缓冲回压丢包 |
-| `bt_avrcp_ct_app.c` | CT 控制 + TG 侧绝对音量；绝对音量只调 A2DP 背景源；Now Playing 缓存；状态机防重入 |
+### MCU 端
 
-AVRCP 对外只读接口（GUI 用）：
+- 按键 PC9 长按进入采集，松开结束；采集期间暂停 A2DP 并关闭本地 media gate。
+- USART3（PD8 TX / PB11 RX）使用 2,000,000 baud、8N1、无流控。
+- 上行：44.1 kHz、单声道、signed int16 little-endian 裸 PCM，无 WAV 头。
+- 下行：同格式回复 PCM；按 16-bit 边界拼接，空闲约 1 秒停止语音源。
+- 回复 PCM 经 `AUDIO_MIXER_SOURCE_VOICE` 播放，当前默认额外衰减到约 0.125 倍，避免盖住背景音乐。
+- littlefs 可选记录 `/pcm/last.pcm` 和 `/pcm/last.txt`，当前默认关闭录音落盘。
 
-- `bt_avrcp_ct_get_title()` / `get_artist()`
-- `bt_avrcp_ct_get_song_length_ms()` / `get_song_position_ms()`
-- `bt_avrcp_ct_get_link_state()` / `get_playback_state()`
-- `bt_avrcp_ct_is_absolute_volume_active()`
+### Orange Pi 端
 
-控制接口：`play / pause / next / previous / volume_up / volume_down`。
+配套源码和部署包在 Windows 目录 `E:\香橙派模型部署`，板端对应目录为 `/home/orangepi`。推荐阅读顺序：
 
-### 4.2 音频会话
+1. `E:\香橙派模型部署\当前开发进度.md`
+2. `E:\香橙派模型部署\voice-assistant\README.md`
+3. `E:\香橙派模型部署\voice-assistant\SERIAL_PCM.md`
+4. `E:\香橙派模型部署\voice-assistant\STARTUP.md`
+5. `E:\香橙派模型部署\rkllm-openai-api\README.md`
 
-`audio_mixer.c` 是统一播放入口：
-
-- 背景音源：A2DP stereo PCM
-- 语音音源：香橙派 AI mono PCM
-- A2DP Absolute Volume 在 Mixer 内映射为背景软件增益，不再衰减最终混音结果
-- 单路时 AI 保持原样；双路时背景音在约 5ms 内降到 0.05
-- AI PCM 暂时断流或结束后，背景音约 250ms 平滑恢复，最终输出使用 int16 饱和保护
-
-`es8311_audio.c` 负责硬件会话：
-
-- 模式：`IDLE` / `PLAYBACK` / `CAPTURE`（互斥）
-- Mixer 背景 ring 放在 **CCM**；采集 ring 和 AI ring 放在主 RAM
-- I2S DMA 双缓冲必须在 **主 RAM**
-- ES8311 保持最终主增益；AVRCP 0~127 音量由 Mixer 的 A2DP 背景源处理
-- `boot_prompt_play_once()`：开机提示音
-
-### 4.3 本地控制
-
-`control_app.c` 取代旧的“按键切采集”主路径：
-
-| 输入 | 动作 |
-|---|---|
-| PC9 单击 | PLAYING→pause；否则 play |
-| PC9 双击 | next |
-| 编码器 PB6/PB7 | volume up / down（优先绝对音量） |
-
-### 4.4 显示与 GUI
-
-| 文件 | 职责 |
-|---|---|
-| `lcd_app.c` | ST7789，SPI1，CS=`PC4`，DC=`PE4`，RST=`PE5`，横屏 320×240，总线约 42 MHz |
-| `mylvgl_app.c` | LVGL disp port；draw buf **36 行** 放 CCM；flush 时 RGB565 字节交换 + `LCD_ShowPicture` |
-| `gui_manager.c` | Welcome ↔ Main 切换；转发 boot prompt 完成事件 |
-| `gui_welcome.c` | 打字机欢迎页，等提示音后淡出 |
-| `gui_main.c` | 播放页：矢量圆盘 + 歌名/歌手 + 进度/时间 + 状态；约 400 ms 刷新；圆盘约 24 s/圈 |
-
-### 4.5 Flash / 字库
-
-| 文件 | 职责 |
-|---|---|
-| `sfud_app.c` | 共总线 SPI 扫卡、JEDEC、SFUD probe、开机清 BP 写保护 |
-| `fal_cfg.h` | 分区表（见下） |
-| `font_app.c` | LVGL 自定义字体：索引表 RAM 缓存 + 单字 32B 点阵按需读 |
-| `font_update.c` | `font_update` / `font_info`：YMODEM 烧字库 + CRC 校验 |
-| `fontlib/` | PC 侧生成 `font.bin`、FontFlasher |
-
-FAL 分区（W25Q128 16MB）：
+处理链路为：
 
 ```text
-font        0 ~ 2MB     汉字点阵（ZBFT），运行时直读
-fw_a        2 ~ 4MB     OTA 下载区（预留）
-fw_b        4 ~ 5MB     回退备份（预留）
-filesystem  5 ~ 16MB    littlefs 预留（业务未挂载产品化）
+MCU PCM -> voice-assistant.service -> Sherpa-ONNX ASR
+        -> Qwen3-4B RKLLM OpenAI API -> Piper TTS
+        -> SoXR 重采样到 44.1 kHz -> reply_44100.pcm
 ```
 
-字库：SimHei 16×16 1bpp，ASCII + 全 GB2312，约 7540 字 / 250 KB。细节见 `fontlib/README.md` 与 `docs/lvgl_chinese_font_design.md`。
+Orange Pi 5 基线为 Ubuntu 22.04.5 LTS、aarch64、8 GiB、RKLLM Runtime 1.3.0，模型为 `Qwen3-4B-rk3588-w8a8.rkllm`。API 默认监听 `127.0.0.1:8888`，由用户级 `rkllm-api.service` 管理；语音服务由 `voice-assistant.service` 管理，并等待稳定设备路径 `/dev/serial/by-id/usb-wch.cn_WCH-Link_00D88F06860A-if02`。
 
----
+当前串口协议仍是裸 PCM + 空闲超时，不是带 START/DATA/END 的可靠帧协议。香橙派服务已经完成接收、ASR、LLM、TTS 和 44.1 kHz 回复文件生成；下行 PCM 的发送策略及双向帧协议仍应作为后续产品化工作单独完善。
 
-## 5. 硬件资源分工
+## 硬件资源
 
 | 资源 | 用途 |
-|---|---|
-| `uart1` | 控制台 / msh / YMODEM 烧字库 |
-| `uart2` | 蓝牙 HCI H4（921600 + 流控）→ ESP32 |
-| `uart3` | PTT PCM 上行与 AI 回复 PCM 下行（2Mbps，半双工切换） |
-| `i2c1`（软） | ES8311 控制，SCL=`PC11`，SDA=`PC12` |
-| `I2S2` + DMA | ES8311 数字音频（播放 / 全双工采集能力仍在） |
-| `SPI1` | **共总线**：ST7789 CS=`PC4` + W25Q128 CS=`PA4`；SCK/MISO/MOSI=`PA5/6/7` |
-| `PC9` | 按键 SW |
-| `PB6/PB7` | 旋转编码器 CLK/DT |
-| CCM 64KB | Mixer 背景 ring + UART 线程栈 + LVGL draw buf（**不可 DMA**） |
+| --- | --- |
+| `uart1` | 控制台、msh、YMODEM 字库升级 |
+| `uart2` | ESP32 HCI H4，921600，硬件流控 |
+| `uart3` | PTT 上行与 AI 回复下行，2 Mbps，无流控 |
+| `I2C1`（软件） | ES8311，SCL=PC11，SDA=PC12 |
+| `I2S2 + DMA` | ES8311 播放/采集 |
+| `SPI1` | ST7789 CS=PC4；W25Q128 CS=PA4；SCK/MISO/MOSI=PA5/PA6/PA7 |
+| `PC9` | PTT / 播控按键 |
+| `PB6/PB7` | 旋转编码器 |
+| CCM 64 KiB | Mixer 背景 ring、UART 线程栈、LVGL draw buffer；不可被 DMA 访问 |
 
----
+## 构建与烧录
 
-## 6. 数据流
+工程是 RT-Thread Studio / SCons 工程，工具链配置在 `rtconfig.py`：`arm-none-eabi-gcc`、`cortex-m4`、链接脚本 `linkscripts/STM32F407VG/link.lds`。
 
-### 6.1 蓝牙播放
+使用 RT-Thread Studio 打开工程即可构建。命令行环境已安装对应 ARM GCC 时，也可以在工程根目录执行：
 
-```text
-手机
-  → A2DP media
-  → bt_a2dp_sink media handler
-  → bt_a2dp_audio_process_media_packet()
-       RTP/SBC 解析 → SBC decode
-  → audio_mixer_write(BACKGROUND)
-       Absolute Volume 背景增益
-  → background ring (CCM)
-  → audio_mixer_render_stereo()
-  → 过启动阈值后 I2S TX DMA
-  → ES8311 DAC → 喇叭
+```powershell
+scons -j4
 ```
 
-### 6.2 PTT AI 对话
+输出目标为 `rt-thread.elf`（Studio 通常同时生成 bin/hex）。本项目不在 README 中固定某台电脑的工具链路径，构建前请确保 `arm-none-eabi-gcc` 已在 `PATH`，或设置 `RTT_EXEC_PATH`。
 
-```text
-长按 PTT
-  → 暂停 A2DP、关闭本地 media gate
-  → ES8311 CAPTURE → uart3 TX → 香橙派
-松开 PTT
-  → 退出 CAPTURE、恢复 A2DP、uart3 切 RX
-  → AI mono PCM → audio_mixer_write(VOICE)
-  → 与 BACKGROUND Duck 混音 → ES8311 固定主增益 → DAC
-```
+烧录顺序：先烧录与 `easy_bootloader_project` 匹配的独立 Bootloader，再烧录应用；首次 OTA 前确认应用向量表、`SCB->VTOR`、链接地址均为 `0x08010000`。升级验证至少检查启动日志、SPP ACK、版本查询和日期查询。
 
-### 6.3 控制与元数据
-
-```text
-按键/编码器
-  → control_app
-  → bt_avrcp_ct_play/pause/next/volume_*
-  → 对端手机播放器
-
-对端通知 / GetElementAttributes
-  → bt_avrcp_ct 缓存 title/artist/pos/len/playback
-  → gui_main 400ms timer 差分刷新 UI
-```
-
-### 6.4 显示刷新
-
-```text
-LVGL 脏区渲染 → CCM draw buf
-  → RGB565 swap（若未开 LV_COLOR_16_SWAP）
-  → LCD_ShowPicture（CPU SPI，无 DMA）
-  → ST7789
-```
-
-中文：`lv_label` UTF-8 → Unicode → `font_app` 二分索引 → FAL 读 32B 点阵。
-
----
-
-## 7. 关键配置摘要
-
-### 7.1 蓝牙（`bt_config.h`）
-
-- 本地名：`WSOZ`
-- Classic 可发现 / 可连接
-- BLE 关闭
-- HCI：`uart2`，921600，流控开
-- AVDTP：1 connection / 1 SEP
-
-### 7.2 SBC 能力（常见组合）
-
-- 44.1 kHz；Stereo / Joint Stereo
-- block 4~16；subbands 4/8；Loudness/SNR；bitpool 2~53
-- 固定 44.1 kHz，与采集及 AI PCM 保持一致，不引入重采样
-
-### 7.3 音频缓冲
-
-- DMA half：512 frames；DMA buffer：1024 frames
-- Mixer background ring：8192 frames（立体声，CCM）
-- Mixer voice ring：4096 frames（单声道，主 RAM）
-- Capture ring：8192 frames（单声道有效 slot，主 RAM，约 186ms）
-- 背景音启动阈值：6144 frames；AI 单独播放启动阈值：1024 frames
-- 默认采样率：44.1 kHz
-
-### 7.4 GUI / 总线
-
-- 逻辑分辨率：320×240（`LCD_ROTATION_90`）
-- LVGL draw buf：36 行 ≈ 23 KB CCM
-- LCD / Flash SPI 工作时钟目标：42 MHz（不稳可降回 30/20）
-- 圆盘动画：约 24 s/圈，36 步 × 10°，降低脏区刷新
-
----
-
-## 8. 已完成能力清单
-
-- [x] RT-Thread + CubeMX 时钟 / 外设 MSP
-- [x] BT-STACK Host + ESP32 Controller HCI
-- [x] A2DP Sink 连接、SBC 解码、ES8311 播放
-- [x] AVRCP 播放/暂停/切歌/音量（相对 + 绝对）
-- [x] Now Playing 元数据缓存与 GUI 展示
-- [x] 按键 + 旋转编码器本地控制
-- [x] ST7789 + LVGL Welcome / 播放主界面
-- [x] W25Q128 SFUD 扫卡、写保护清除
-- [x] FAL 分区；ZBFT 中文字库运行时渲染
-- [x] YMODEM `font_update` / `font_info`
-- [x] 开机提示音与 Welcome 同步退出
-- [x] 进度条对“暂停再播瞬态 position=0”的防闪处理
-
----
-
-## 9. 已知限制与坑
-
-1. **SBC fragmentation 未实现** — 部分源端可能卡顿/丢音  
-2. **播放与采集互斥** — 当前产品路径以播放为主  
-3. **SPI 无 DMA 刷屏** — 卡顿主要受 SPI 带宽与脏区影响；draw buf 在 CCM 无法直接 DMA  
-4. **LCD 与 Flash 共 SPI1** — 字库读与刷屏争用；探卡必须拉高 LCD CS  
-5. **W25Q 写保护** — 出厂/旧 OTA 可能 BP 全置位，擦写静默失败；`sfud_app_init` 已自动清  
-6. **个别手机元数据编码** — 按 UTF-8 显示；非 UTF-8 可能乱码/空白  
-7. **42 MHz SPI** — 布线差时可能花屏/字库偶发读坏，需降频  
-8. **littlefs / OTA** — 分区在，业务未接  
-9. **`uart_send_pcm` / 采集切模式** — 代码仍在，主路径已改为 AVRCP 音箱控制  
-
-字库度量注意：`base_line=0`、`ofs_y=0`，否则 16×16 全格点阵会被裁成“只剩上半”。
-
----
-
-## 10. 常用调试命令
+## 常用命令
 
 | 命令 | 作用 |
-|---|---|
-| `sfud_app_info` / `sfud_app_jedec` / `sfud_app_hwcheck` | Flash 识别与硬件自检 |
-| `font_update` | YMODEM 接收 `font.bin` 到 `font` 分区 |
-| `font_info` | 字库头 + CRC 校验 |
-| `lcd_app_test` | ST7789 色条测试（会冲掉 LVGL 画面） |
+| --- | --- |
+| `sfud_app_info` / `sfud_app_jedec` / `sfud_app_hwcheck` | W25Q128 识别与硬件自检 |
+| `fs_app_info` | littlefs 挂载状态和 `/pcm` 文件 |
+| `font_update` | 通过 YMODEM 写入 `font` 分区 |
+| `font_info` | 字库头信息与 CRC 校验 |
+| `lcd_app_test` | ST7789 色条测试（会覆盖 LVGL 画面） |
 
-烧字库也可用 `fontlib/FontFlasher.exe`（需独占串口）。
+字库也可使用 `fontlib/FontFlasher.exe` 烧录；烧录时必须独占 `uart1`。
 
----
+## 目录索引
 
-## 11. 关键文件索引
+```text
+applications/                         应用入口、蓝牙、音频、GUI、文件系统
+mycomponents/BT-STACK/                BTstack Host、RT-Thread port、ESP32 chipset
+mycomponents/easy_bootloader_app/     SPP OTA 应用侧协议与 FAL/BCB 适配
+mycomponents/es8311/                  ES8311 驱动
+mycomponents/LCD/                     ST7789 驱动
+mycomponents/keyboard/                按键和编码器
+packages/LVGL-v8.3.11/                LVGL GUI
+packages/littlefs-v2.5.0/             littlefs
+fontlib/                               字库生成与烧录工具
+docs/lvgl_chinese_font_design.md      中文字体设计说明
+linkscripts/STM32F407VG/link.lds      应用 Flash/RAM/CCM 布局
+```
 
-**应用层**
+## 已知限制
 
-- `applications/main.c`
-- `applications/bt_app.c` / `bt_a2dp_sink_app.*` / `bt_a2dp_audio.*` / `bt_avrcp_ct_app.*`
-- `applications/es8311_audio.*` / `control_app.*`
-- `applications/lcd_app.*` / `mylvgl_app.*`
-- `applications/gui_manager.*` / `gui_welcome.*` / `gui_main.*`
-- `applications/sfud_app.*` / `fal_cfg.h` / `font_app.*` / `font_update.c`
+1. A2DP SBC fragmentation 尚未重组，部分源端可能丢包或卡顿。
+2. PTT 仍采用裸 PCM 和空闲超时，暂时没有序号、长度、CRC 和明确结束帧。
+3. Orange Pi 端当前按轮次生成回复 PCM；要实现可靠双向产品链路，还需要增加下行传输和统一帧协议。
+4. 播放与采集是互斥会话，当前没有全双工回声消除。
+5. LCD 与 W25Q128 共用 SPI1，刷屏无 DMA；42 MHz 不稳定时应降到 30/20 MHz。
+6. HFP/HSP、BLE 业务和触摸屏播控未接入；littlefs 目前主要用于 PTT 录音验证。
+7. AVRCP 元数据按 UTF-8 显示，源端编码异常时可能出现乱码。
 
-**组件与包**
+## 一句话总结
 
-- `mycomponents/BT-STACK/`（含 `bt_config.h`、port、ESP32 chipset）
-- `mycomponents/es8311/` / `LCD/` / `keyboard/`
-- `packages/LVGL-v8.3.11/` / `packages/littlefs-v2.5.0/`
-
-**文档与工具**
-
-- `fontlib/README.md` — 字库生成与烧录
-- `docs/lvgl_chinese_font_design.md` — 中文字库设计说明
-- `drivers/board.c` / `drv_*.c` / `cubemx/` — BSP 与 Cube 工程
-
----
-
-## 12. 后续方向（音箱之后）
-
-音箱主链路可视为 **MVP 已闭环**。建议优先级：
-
-1. 为 AI UART 增加长度、结束标记和校验，替代裸流空闲超时
-2. 补 SBC fragmentation，提升多机型稳定性  
-3. 根据实机听感调校 Mixer Duck 比例和 attack/release
-4. 若要更顺滑 GUI：主 RAM 双 draw buf + SPI DMA，或 LCD/Flash 分总线  
-5. OTA 与 fw_a/fw_b 落地  
-6. 需要时再开 HFP / BLE
-
----
-
-## 13. 一句话总结
-
-当前工程已形成 **蓝牙音箱 + PTT AI 对话 + 双音源混音** 主链：
-
-`手机 → ESP32 Controller → BT-STACK A2DP/AVRCP → SBC 解码 → ES8311 播放`  
-+ `按键/编码器本地控播`  
-+ `LVGL 播放页 + W25Q 中文字库`
-+ `PTT PCM ↔ 香橙派 AI，回复语音与 A2DP 背景音动态混音`
+`手机 A2DP/AVRCP -> ESP32 HCI -> STM32 BT-STACK -> SBC/AVRCP -> Mixer/ES8311`，再结合 `PTT PCM <-> Orange Pi 本地 ASR/LLM/TTS`、LVGL 中文播放页和 SPP A/B OTA，构成当前 Bluetooth Audio 工程的完整主架构。

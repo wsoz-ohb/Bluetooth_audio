@@ -14,6 +14,7 @@
 #include "bt_config.h"
 #include "btstack_defines.h"
 #include "btstack_event.h"
+#include "btstack_run_loop.h"
 #include "btstack_util.h"
 #include "bluetooth.h"
 #include "classic/rfcomm.h"
@@ -28,6 +29,7 @@
 #define BT_SPP_RFCOMM_CHANNEL       1u
 #define BT_SPP_RFCOMM_MAX_FRAME     1024u
 #define BT_SPP_RX_BUFFER_SIZE       1024u
+#define BT_SPP_TX_BUFFER_SIZE       1024u
 #define BT_SPP_SDP_RECORD_HANDLE    0x00010004u
 #define BT_SPP_SDP_RECORD_SIZE      200u
 #define BT_SPP_SERVICE_NAME         "WSOZ SPP"
@@ -38,6 +40,8 @@ typedef struct
 {
     struct rt_ringbuffer rx_ring;
     rt_uint8_t rx_storage[BT_SPP_RX_BUFFER_SIZE];
+    struct rt_ringbuffer tx_ring;
+    rt_uint8_t tx_storage[BT_SPP_TX_BUFFER_SIZE];
     struct rt_mutex lock;
     rt_bool_t lock_inited;
 
@@ -47,10 +51,15 @@ typedef struct
     rt_uint16_t max_frame_size;
     rt_size_t rx_dropped_bytes;
     rt_bool_t overflow_logged;
+    rt_bool_t tx_callback_scheduled;
 } bt_spp_context_t;
 
 static bt_spp_context_t bt_spp_ctx;
 static rt_uint8_t bt_spp_sdp_record[BT_SPP_SDP_RECORD_SIZE];
+static btstack_context_callback_registration_t bt_spp_tx_callback;
+static rt_uint8_t bt_spp_tx_frame[BT_SPP_RFCOMM_MAX_FRAME];
+
+static void bt_spp_tx_kick_on_btstack_thread(void *context);
 
 #if BT_SPP_RX_DUMP_ENABLED
 static void bt_spp_log_rx_data(const rt_uint8_t *data,
@@ -108,6 +117,63 @@ static void bt_spp_reset_rx_locked(void)
     rt_ringbuffer_reset(&bt_spp_ctx.rx_ring);
     bt_spp_ctx.rx_dropped_bytes = 0u;
     bt_spp_ctx.overflow_logged = RT_FALSE;
+}
+
+static void bt_spp_reset_tx_locked(void)
+{
+    rt_ringbuffer_reset(&bt_spp_ctx.tx_ring);
+    bt_spp_ctx.tx_callback_scheduled = RT_FALSE;
+}
+
+static void bt_spp_tx_kick_on_btstack_thread(void *context)
+{
+    rt_uint16_t cid;
+    rt_uint16_t frame_size;
+    rt_size_t tx_len;
+    rt_bool_t request_send_event = RT_FALSE;
+
+    (void)context;
+    (void)rt_mutex_take(&bt_spp_ctx.lock, RT_WAITING_FOREVER);
+    bt_spp_ctx.tx_callback_scheduled = RT_FALSE;
+    cid = bt_spp_ctx.rfcomm_cid;
+    tx_len = rt_ringbuffer_data_len(&bt_spp_ctx.tx_ring);
+    frame_size = bt_spp_ctx.max_frame_size;
+
+    if ((cid == 0u) || (tx_len == 0u))
+    {
+        rt_mutex_release(&bt_spp_ctx.lock);
+        return;
+    }
+
+    if (!rfcomm_can_send_packet_now(cid))
+    {
+        rt_mutex_release(&bt_spp_ctx.lock);
+        (void)rfcomm_request_can_send_now_event(cid);
+        return;
+    }
+
+    if ((frame_size == 0u) || (frame_size > sizeof(bt_spp_tx_frame)))
+    {
+        frame_size = sizeof(bt_spp_tx_frame);
+    }
+    if (tx_len < frame_size)
+    {
+        frame_size = (rt_uint16_t)tx_len;
+    }
+    (void)rt_ringbuffer_get(&bt_spp_ctx.tx_ring, bt_spp_tx_frame, frame_size);
+    request_send_event = (rt_ringbuffer_data_len(&bt_spp_ctx.tx_ring) != 0u) ?
+                         RT_TRUE : RT_FALSE;
+    rt_mutex_release(&bt_spp_ctx.lock);
+
+    if (rfcomm_send(cid, bt_spp_tx_frame, frame_size) != ERROR_CODE_SUCCESS)
+    {
+        LOG_E("SPP TX failed, cid=0x%04x", cid);
+        return;
+    }
+    if (request_send_event)
+    {
+        (void)rfcomm_request_can_send_now_event(cid);
+    }
 }
 
 static void bt_spp_packet_handler(uint8_t packet_type,
@@ -212,6 +278,7 @@ static void bt_spp_packet_handler(uint8_t packet_type,
             bt_spp_ctx.rfcomm_cid = rfcomm_cid;
             bt_spp_ctx.max_frame_size = rfcomm_event_channel_opened_get_max_frame_size(packet);
             bt_spp_reset_rx_locked();
+            bt_spp_reset_tx_locked();
         }
         else if (bt_spp_ctx.pending_rfcomm_cid == rfcomm_cid)
         {
@@ -248,6 +315,7 @@ static void bt_spp_packet_handler(uint8_t packet_type,
             bt_spp_ctx.rfcomm_cid = 0u;
             bt_spp_ctx.max_frame_size = 0u;
             bt_spp_reset_rx_locked();
+            bt_spp_reset_tx_locked();
             clear_state = RT_TRUE;
         }
         rt_mutex_release(&bt_spp_ctx.lock);
@@ -258,6 +326,10 @@ static void bt_spp_packet_handler(uint8_t packet_type,
         }
         break;
     }
+
+    case RFCOMM_EVENT_CAN_SEND_NOW:
+        bt_spp_tx_kick_on_btstack_thread(RT_NULL);
+        break;
 
     default:
         break;
@@ -296,6 +368,12 @@ rt_err_t bt_spp_service_init(void)
     rt_ringbuffer_init(&bt_spp_ctx.rx_ring,
                        bt_spp_ctx.rx_storage,
                        sizeof(bt_spp_ctx.rx_storage));
+    rt_ringbuffer_init(&bt_spp_ctx.tx_ring,
+                       bt_spp_ctx.tx_storage,
+                       sizeof(bt_spp_ctx.tx_storage));
+    bt_spp_tx_callback.item = RT_NULL;
+    bt_spp_tx_callback.callback = bt_spp_tx_kick_on_btstack_thread;
+    bt_spp_tx_callback.context = RT_NULL;
 
     status = rfcomm_register_service(bt_spp_packet_handler,
                                      BT_SPP_RFCOMM_CHANNEL,
@@ -390,4 +468,41 @@ rt_bool_t bt_spp_is_connected(void)
     connected = (bt_spp_ctx.rfcomm_cid != 0u) ? RT_TRUE : RT_FALSE;
     rt_mutex_release(&bt_spp_ctx.lock);
     return connected;
+}
+
+rt_size_t bt_spp_tx_write(const rt_uint8_t *buffer, rt_size_t size)
+{
+    rt_bool_t schedule_callback = RT_FALSE;
+
+    if (!bt_spp_ctx.lock_inited || (buffer == RT_NULL) || (size == 0u) ||
+        (size > BT_SPP_TX_BUFFER_SIZE))
+    {
+        return 0u;
+    }
+
+    (void)rt_mutex_take(&bt_spp_ctx.lock, RT_WAITING_FOREVER);
+    if ((bt_spp_ctx.rfcomm_cid == 0u) ||
+        (rt_ringbuffer_space_len(&bt_spp_ctx.tx_ring) < size))
+    {
+        rt_mutex_release(&bt_spp_ctx.lock);
+        return 0u;
+    }
+
+    if (rt_ringbuffer_put(&bt_spp_ctx.tx_ring, buffer, (rt_uint16_t)size) != size)
+    {
+        rt_mutex_release(&bt_spp_ctx.lock);
+        return 0u;
+    }
+    if (!bt_spp_ctx.tx_callback_scheduled)
+    {
+        bt_spp_ctx.tx_callback_scheduled = RT_TRUE;
+        schedule_callback = RT_TRUE;
+    }
+    rt_mutex_release(&bt_spp_ctx.lock);
+
+    if (schedule_callback)
+    {
+        btstack_run_loop_execute_on_main_thread(&bt_spp_tx_callback);
+    }
+    return size;
 }
