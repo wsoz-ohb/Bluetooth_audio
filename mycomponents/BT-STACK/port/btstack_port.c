@@ -9,12 +9,14 @@
 #include "btstack_run_loop_embedded.h"
 #include "btstack_tlv.h"
 #include "btstack_tlv_none.h"
+#include "btstack_tlv_littlefs.h"
 #include "btstack_uart_block.h"
 #include "btstack_util.h"
 #include "hci.h"
 
 #if BT_CFG_ENABLE_CLASSIC
 #include "classic/btstack_link_key_db_memory.h"
+#include "classic/btstack_link_key_db_tlv.h"
 #endif
 
 #define BTSTACK_PORT_THREAD_NAME       "btstack"
@@ -45,6 +47,7 @@ static void btstack_port_power_on(void * context){
 
 int btstack_port_init(const btstack_chipset_t * chipset_driver){
     const btstack_chipset_t * effective_chipset = chipset_driver;
+    const btstack_tlv_t * persistent_tlv = NULL;
 
     if (btstack_port_inited){
         return RT_EOK;
@@ -57,15 +60,26 @@ int btstack_port_init(const btstack_chipset_t * chipset_driver){
 
     // 先把 OS 相关的 run loop/TLV 准备好，再把 UART 和 chipset 驱动交给 Host 层。
     btstack_run_loop_init(btstack_run_loop_embedded_get_instance());
-    btstack_tlv_set_instance(btstack_tlv_none_init_instance(), NULL);
+    if (btstack_tlv_littlefs_init() == RT_EOK){
+        persistent_tlv = btstack_tlv_littlefs_instance();
+        btstack_tlv_set_instance(persistent_tlv, NULL);
+        log_info("BTstack Link Key persistence enabled");
+    } else {
+        // 文件系统不可用时保留蓝牙功能，但配对信息只存于本次运行的 RAM。
+        btstack_tlv_set_instance(btstack_tlv_none_init_instance(), NULL);
+        log_error("BTstack Link Key persistence unavailable, using RAM only");
+    }
 
     if (bt_host_stack_init(btstack_uart_block_embedded_instance(), effective_chipset) != 0){
         return -RT_ERROR;
     }
 
 #if BT_CFG_ENABLE_CLASSIC
-    // 当前 Link Key 只放在 RAM 里，后面如果要掉电保存，再切到持久化实现。
-    hci_set_link_key_db(btstack_link_key_db_memory_instance());
+    if (persistent_tlv != NULL){
+        hci_set_link_key_db(btstack_link_key_db_tlv_get_instance(persistent_tlv, NULL));
+    } else {
+        hci_set_link_key_db(btstack_link_key_db_memory_instance());
+    }
 #endif
 
     // 这里只做协议栈和本地设备参数准备，还没有真正让控制器上电。
