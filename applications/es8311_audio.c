@@ -20,6 +20,7 @@
 #define ES8311_AUDIO_DMA_BUFFER_FRAMES               (ES8311_AUDIO_DMA_HALF_FRAMES * 2u)
 #define ES8311_AUDIO_DMA_TX_SAMPLES                  (ES8311_AUDIO_DMA_BUFFER_FRAMES * ES8311_AUDIO_PLAYBACK_OUTPUT_CHANNELS)
 #define ES8311_AUDIO_DMA_RX_SAMPLES                  (ES8311_AUDIO_DMA_BUFFER_FRAMES * ES8311_AUDIO_PLAYBACK_OUTPUT_CHANNELS)
+#define ES8311_AUDIO_PLAYBACK_RAMP_FRAMES             1024u
 #define ES8311_AUDIO_CAPTURE_BUFFER_FRAMES           4096u
 #define ES8311_AUDIO_CAPTURE_BUFFER_SAMPLES          (ES8311_AUDIO_CAPTURE_BUFFER_FRAMES * ES8311_AUDIO_CAPTURE_OUTPUT_CHANNELS)
 
@@ -57,6 +58,7 @@ typedef struct
     rt_bool_t playback_running;
     rt_bool_t capture_running;
     rt_bool_t playback_start_pending;
+    rt_uint32_t playback_ramp_frame;
     rt_bool_t playback_underflow_notice_printed;
     rt_bool_t capture_overflow_notice_printed;
     rt_uint32_t capture_drop_frames;
@@ -324,6 +326,7 @@ static rt_err_t es8311_audio_start_playback_dma(void)
 
     es8311_audio_clear_dma_buffers();
     // DMA 启动前先把两个 half 都预填好，避免一上来就发未初始化数据。
+    es8311_audio_ctx.playback_ramp_frame = 0u;
     es8311_audio_fill_tx_range(0u, ES8311_AUDIO_DMA_HALF_FRAMES);
     es8311_audio_fill_tx_range(ES8311_AUDIO_DMA_HALF_FRAMES, ES8311_AUDIO_DMA_HALF_FRAMES);
     if (HAL_I2S_Transmit_DMA(&hi2s2,
@@ -503,6 +506,24 @@ static void es8311_audio_fill_tx_range(rt_size_t offset_frames, rt_size_t frames
         }
     }
     rendered_samples = (rt_size_t) rendered_frames * ES8311_AUDIO_PLAYBACK_OUTPUT_CHANNELS;
+
+    /* Keep the startup ramp continuous across DMA halves, with equal L/R gain. */
+    for (sample_index = 0u;
+         (sample_index < rendered_samples) &&
+         (es8311_audio_ctx.playback_ramp_frame < ES8311_AUDIO_PLAYBACK_RAMP_FRAMES);
+         sample_index += ES8311_AUDIO_PLAYBACK_OUTPUT_CHANNELS)
+    {
+        rt_size_t channel;
+        rt_int32_t ramp_frame = (rt_int32_t) es8311_audio_ctx.playback_ramp_frame;
+
+        for (channel = 0u; channel < ES8311_AUDIO_PLAYBACK_OUTPUT_CHANNELS; channel++)
+        {
+            target[sample_index + channel] = (rt_int16_t)
+                (((rt_int32_t) target[sample_index + channel] * ramp_frame) /
+                 (rt_int32_t) (ES8311_AUDIO_PLAYBACK_RAMP_FRAMES - 1u));
+        }
+        es8311_audio_ctx.playback_ramp_frame++;
+    }
 
     if ((rendered_frames < frames) && es8311_audio_ctx.playback_running &&
         !es8311_audio_ctx.playback_underflow_notice_printed)
