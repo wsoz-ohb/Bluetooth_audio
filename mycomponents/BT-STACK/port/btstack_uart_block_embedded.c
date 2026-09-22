@@ -424,8 +424,8 @@ static const btstack_uart_block_t btstack_uart_rtthread_block = {
     &btstack_uart_rtthread_init,
     &btstack_uart_rtthread_open,
     &btstack_uart_rtthread_close,
-    &btstack_uart_rtthread_set_block_received,
-    &btstack_uart_rtthread_set_block_sent,
+    &btstack_uart_rtthread_set_block_received,  //收到指定字节后通知H4（分帧）
+    &btstack_uart_rtthread_set_block_sent,      //发送指定字节后通知H4（通知下一包继续发）
     &btstack_uart_rtthread_set_baudrate,
     &btstack_uart_rtthread_set_parity,
     &btstack_uart_rtthread_set_flowcontrol,

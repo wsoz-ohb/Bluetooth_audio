@@ -595,7 +595,7 @@ rt_err_t control_app_init(void)
 
     LOG_I("key sw init ok, pin=PC9 (click=play/pause, double=next, long=PTT talk)");
 
-    control_encoder_init();
+    control_encoder_init(); //编码器初始化
 
     g_control_thread = rt_thread_create("control",
                                         control_thread_entry,

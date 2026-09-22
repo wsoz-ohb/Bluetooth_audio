@@ -600,17 +600,17 @@ static rt_err_t es8311_apply_config(const es8311_config_t * config)
         return -RT_EINVAL;
     }
 
-    if (es8311_apply_clock_config(config) != RT_EOK)
+    if (es8311_apply_clock_config(config) != RT_EOK)    //配置时钟，选择MCLK/LRCK作为时钟源（由MASTER_stm32提供决定）
     {
         return -RT_ERROR;
     }
 
-    if (es8311_apply_interface_config(config) != RT_EOK)
+    if (es8311_apply_interface_config(config) != RT_EOK)    //配置音频接口，包括I2S/左对齐/右对齐/DSP模式，采样位宽，左右声道选择
     {
         return -RT_ERROR;
     }
 
-    if (es8311_apply_playback_defaults(config) != RT_EOK)
+    if (es8311_apply_playback_defaults(config) != RT_EOK)   //做播放准备
     {
         return -RT_ERROR;
     }
@@ -633,16 +633,16 @@ rt_err_t es8311_init(void)
 
     es8311_load_default_config(&es8311_ctx.config);
 
-    err = es8311_soft_reset();
+    err = es8311_soft_reset();  //软件复位，内部状态清空
     if (err != RT_EOK)
     {
         LOG_E("es8311 reset failed");
         return err;
     }
 
-    (void) es8311_probe_chip_id();
+    (void) es8311_probe_chip_id();  //读取芯片ID，验证芯片是否正常
 
-    err = es8311_apply_config(&es8311_ctx.config);
+    err = es8311_apply_config(&es8311_ctx.config);  //时钟，音频接口，播放等配置
     if (err != RT_EOK)
     {
         LOG_E("es8311 apply default config failed");

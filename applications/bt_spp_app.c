@@ -197,7 +197,7 @@ static void bt_spp_packet_handler(uint8_t packet_type,
             return;
         }
 
-        stored_len = rt_ringbuffer_put(&bt_spp_ctx.rx_ring, packet, size);
+        stored_len = rt_ringbuffer_put(&bt_spp_ctx.rx_ring, packet, size);  //将数据存入环形缓冲区
         if (stored_len < size)
         {
             bt_spp_ctx.rx_dropped_bytes += (rt_size_t)(size - stored_len);
@@ -219,10 +219,10 @@ static void bt_spp_packet_handler(uint8_t packet_type,
     {
         return;
     }
-
+    //连接状态事件处理
     switch (hci_event_packet_get_type(packet))
     {
-    case RFCOMM_EVENT_INCOMING_CONNECTION:
+    case RFCOMM_EVENT_INCOMING_CONNECTION:  //接收连接事件
     {
         rt_uint16_t rfcomm_cid;
         rt_bool_t accept_connection = RT_FALSE;
@@ -263,7 +263,7 @@ static void bt_spp_packet_handler(uint8_t packet_type,
         break;
     }
 
-    case RFCOMM_EVENT_CHANNEL_OPENED:
+    case RFCOMM_EVENT_CHANNEL_OPENED:    //连接成功事件
     {
         rt_uint8_t status;
         rt_uint16_t rfcomm_cid;
@@ -327,7 +327,7 @@ static void bt_spp_packet_handler(uint8_t packet_type,
         break;
     }
 
-    case RFCOMM_EVENT_CAN_SEND_NOW:
+    case RFCOMM_EVENT_CAN_SEND_NOW:     //发送
         bt_spp_tx_kick_on_btstack_thread(RT_NULL);
         break;
 
@@ -364,7 +364,7 @@ rt_err_t bt_spp_service_init(void)
         }
         bt_spp_ctx.lock_inited = RT_TRUE;
     }
-
+    //rx和tx环形缓冲区初始化
     rt_ringbuffer_init(&bt_spp_ctx.rx_ring,
                        bt_spp_ctx.rx_storage,
                        sizeof(bt_spp_ctx.rx_storage));
@@ -372,10 +372,10 @@ rt_err_t bt_spp_service_init(void)
                        bt_spp_ctx.tx_storage,
                        sizeof(bt_spp_ctx.tx_storage));
     bt_spp_tx_callback.item = RT_NULL;
-    bt_spp_tx_callback.callback = bt_spp_tx_kick_on_btstack_thread;
+    bt_spp_tx_callback.callback = bt_spp_tx_kick_on_btstack_thread; //发送数据的回调函数
     bt_spp_tx_callback.context = RT_NULL;
 
-    status = rfcomm_register_service(bt_spp_packet_handler,
+    status = rfcomm_register_service(bt_spp_packet_handler,     //注册本地RFCOMM服务，指定回调函数、通道号和最大帧长度
                                      BT_SPP_RFCOMM_CHANNEL,
                                      BT_SPP_RFCOMM_MAX_FRAME);
     if (status != ERROR_CODE_SUCCESS)

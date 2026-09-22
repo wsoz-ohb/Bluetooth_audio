@@ -52,7 +52,7 @@ extern "C" {
 
 typedef enum
 {
-    ES8311_AUDIO_FMT_I2S    = 0u,
+    ES8311_AUDIO_FMT_I2S    = 0u,   //PCM在I2S上的格式，标准I2S格式，左对齐，右对齐，DSP模式
     ES8311_AUDIO_FMT_LEFT_J = 1u,
     ES8311_AUDIO_FMT_DSP    = 3u,
 } es8311_audio_format_t;
@@ -65,8 +65,8 @@ typedef enum
 
 typedef enum
 {
-    ES8311_INPUT_MIC  = 0u,
-    ES8311_INPUT_DMIC = 1u,
+    ES8311_INPUT_MIC  = 0u,     //模拟麦克风
+    ES8311_INPUT_DMIC = 1u,     //数字麦克风
 } es8311_input_mode_t;
 
 typedef enum

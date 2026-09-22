@@ -141,7 +141,7 @@ static void bt_app_handle_a2dp_meta_event(uint8_t * packet)
     subevent = hci_event_a2dp_meta_get_subevent_code(packet);
     switch (subevent)
     {
-    case A2DP_SUBEVENT_SIGNALING_CONNECTION_ESTABLISHED:
+    case A2DP_SUBEVENT_SIGNALING_CONNECTION_ESTABLISHED:    //SINGALING连接建立事件，建立之后发起AVRCP连接
     {
         bd_addr_t remote_addr;
         uint8_t status;
@@ -165,7 +165,7 @@ static void bt_app_handle_a2dp_meta_event(uint8_t * packet)
         LOG_I("A2DP signaling connected, remote=%s, cid=0x%04x",
               bd_addr_to_str(remote_addr),
               bt_app_a2dp_cid);
-        if (bt_avrcp_ct_connect(remote_addr) != RT_EOK)
+        if (bt_avrcp_ct_connect(remote_addr) != RT_EOK)     //发起AVRCP连接(此处可以获取bd)
         {
             LOG_W("AVRCP CT connect request was not accepted, remote=%s",
                   bd_addr_to_str(remote_addr));
@@ -173,7 +173,7 @@ static void bt_app_handle_a2dp_meta_event(uint8_t * packet)
         break;
     }
 
-    case A2DP_SUBEVENT_SIGNALING_MEDIA_CODEC_SBC_CONFIGURATION:
+    case A2DP_SUBEVENT_SIGNALING_MEDIA_CODEC_SBC_CONFIGURATION:     //SBC协商结果事件，同时更新SBC配置和采样率
     {
         rt_uint32_t sample_rate;
 
@@ -196,7 +196,7 @@ static void bt_app_handle_a2dp_meta_event(uint8_t * packet)
         break;
     }
 
-    case A2DP_SUBEVENT_STREAM_ESTABLISHED:
+    case A2DP_SUBEVENT_STREAM_ESTABLISHED:      //A2DP流建立事件，建立之后才会有媒体数据（理解为OPEN）
     {
         bd_addr_t remote_addr;
         uint8_t status;
@@ -225,7 +225,7 @@ static void bt_app_handle_a2dp_meta_event(uint8_t * packet)
         break;
     }
 
-    case A2DP_SUBEVENT_STREAM_STARTED:
+    case A2DP_SUBEVENT_STREAM_STARTED:          //START 
         bt_app_a2dp_suspend_in_progress = RT_FALSE;
         bt_app_a2dp_stream_active = RT_TRUE;
         if (!bt_app_a2dp_local_media_enabled)
@@ -380,7 +380,7 @@ rt_err_t bt_a2dp_sink_service_init(void)
     LOG_E("A2DP Sink requires SDP support");
     return -RT_ERROR;
 #else
-    if (bt_a2dp_audio_init() != RT_EOK)
+    if (bt_a2dp_audio_init() != RT_EOK) //绑定SBC解码器和PCM回调
     {
         LOG_E("bt_a2dp_audio_init failed");
         return -RT_ERROR;
@@ -394,7 +394,7 @@ rt_err_t bt_a2dp_sink_service_init(void)
 
     // 这里先把 HCI 通用事件挂上，后面既能看上电状态，也能统一接 A2DP META 事件。
     bt_app_hci_event_callback_registration.callback = &bt_app_packet_handler;
-    hci_add_event_handler(&bt_app_hci_event_callback_registration);
+    hci_add_event_handler(&bt_app_hci_event_callback_registration);             //hci 事件回调
 
     // 先准备默认 SBC 配置，再创建本地 Sink 端点。
     status = avdtp_config_sbc_store(bt_app_a2dp_sbc_configuration, &bt_app_a2dp_sbc_preferred_configuration);
@@ -405,8 +405,8 @@ rt_err_t bt_a2dp_sink_service_init(void)
     }
 
     a2dp_sink_init();
-    a2dp_sink_register_packet_handler(bt_app_packet_handler);
-    a2dp_sink_register_media_handler(bt_app_a2dp_sink_media_handler);
+    a2dp_sink_register_packet_handler(bt_app_packet_handler);   //A2DP的事件和状态回调
+    a2dp_sink_register_media_handler(bt_app_a2dp_sink_media_handler);   //A2DP的媒体数据回调
 
     // 创建本地 Sink SEP。
     // 后面远端查询 capability 时，看到的就是这里注册的 codec 能力。

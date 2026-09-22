@@ -1418,7 +1418,7 @@ rt_err_t bt_avrcp_ct_service_init(void)
     //绑定AVRCP事件回调函数
     avrcp_controller_register_packet_handler(btstack_event_avrcp_controller_handler);
     avrcp_target_register_packet_handler(btstack_event_avrcp_controller_handler);
-    avrcp_register_packet_handler(btstack_event_avrcp_controller_handler);
+    avrcp_register_packet_handler(btstack_event_avrcp_controller_handler);  //AVRCP公共事件回调
     //注册SDP服务
     if (bt_avrcp_ct_sdp_register_service() != RT_EOK)
     {
