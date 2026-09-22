@@ -12,19 +12,16 @@
 
 #include <rtconfig.h>
 
-/* ===================== Flash device Configuration ========================= */
 /* nor_flash0 由 fal_flash_sfud_port.c 提供，底层通过
  * rt_sfud_flash_find_by_dev_name(FAL_USING_NOR_FLASH_DEV_NAME) 找到
  * sfud_app.c probe 出来的 "W25Q128"，容量/擦除粒度初始化时自动更新。 */
 extern struct fal_flash_dev nor_flash0;
 
-/* flash device table：只有板载这一颗 W25Q128 */
 #define FAL_FLASH_DEV_TABLE                                          \
 {                                                                    \
     &nor_flash0,                                                     \
 }
 
-/* ====================== Partition Configuration ========================== */
 #ifdef FAL_PART_HAS_TABLE_CFG
 /* W25Q128 共 16MB，布局：
  *   font       0        ~ 2MB  : 汉字点阵字库（GB2312 16x16 约 260KB），裸分区地址直读，

@@ -32,18 +32,15 @@
 #define DBG_LVL DBG_INFO
 #include <rtdbg.h>
 
-/* ============ 按键配置 ============ */
 #define CONTROL_KEY_SW_ID              1u
 #define CONTROL_KEY_SW_NAME            "sw"
 #define CONTROL_KEY_SW_PIN             GET_PIN(C, 9)
 
-/* ============ 旋转编码器配置（GPIO 轮询 + AB 相状态机）============ */
 #define CONTROL_ENCODER_CLK_PIN        GET_PIN(B, 6)   /* CLK (A 相) */
 #define CONTROL_ENCODER_DT_PIN         GET_PIN(B, 7)   /* DT  (B 相) */
 #define CONTROL_ENCODER_STEPS_PER_CMD  2
 #define CONTROL_ENCODER_CMD_INTERVAL_MS 50
 
-/* ============ 线程配置 ============ */
 #define CONTROL_THREAD_STACK_SIZE      2048
 #define CONTROL_THREAD_PRIORITY        19
 #define CONTROL_THREAD_TICK            10
@@ -284,7 +281,6 @@ static void control_ptt_stop(void)
     uart_send_pcm_stop();
     es8311_audio_flush_capture();
 
-    /* 回到 idle,等对端 play / STREAM_STARTED 再 arm 播放 */
     (void)es8311_audio_set_run_mode(ES8311_AUDIO_RUN_MODE_IDLE);
 
     if (g_ptt_media_gate_closed)
@@ -349,7 +345,6 @@ static void control_key_event_cb(const char *keyname, uint16_t key_id, kb_event_
         return;
     }
 
-    /* 长按说话: 按住开始,松手结束 */
     if (evt == KB_EVT_LONGPRESS)
     {
         g_ptt_want_hold = RT_TRUE;
@@ -595,7 +590,7 @@ rt_err_t control_app_init(void)
 
     LOG_I("key sw init ok, pin=PC9 (click=play/pause, double=next, long=PTT talk)");
 
-    control_encoder_init(); //编码器初始化
+    control_encoder_init();
 
     g_control_thread = rt_thread_create("control",
                                         control_thread_entry,

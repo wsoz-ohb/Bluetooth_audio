@@ -64,7 +64,6 @@
 
 /* 单次 PTT 落盘上限，防止把 11MB 分区写满：约 30s @44.1k mono int16 */
 #define UART_SEND_PCM_FILE_MAX_BYTES    (44100u * 2u * 30u)
-/* littlefs 挂在根 "/"，录音目录 /pcm（见 fs_app.c） */
 #define UART_SEND_PCM_FILE_PATH         "/pcm/last.pcm"
 #define UART_SEND_PCM_META_PATH         "/pcm/last.txt"
 
@@ -707,7 +706,6 @@ static rt_err_t uart_send_pcm_open_file(void)
         }
     }
 
-    /* 每次 PTT 覆盖 last.pcm，方便 msh 直接取最新一截 */
     uart_send_pcm_file_fd = open(UART_SEND_PCM_FILE_PATH, O_WRONLY | O_CREAT | O_TRUNC, 0);
     if (uart_send_pcm_file_fd < 0)
     {
@@ -770,7 +768,6 @@ static void uart_send_pcm_write_file_direct(const rt_uint8_t *data, rt_size_t by
         uart_send_pcm_file_bytes += (rt_uint32_t)written;
     }
 
-    /* 超出 cap 的尾巴算 drop */
     if (bytes > remain)
     {
         uart_send_pcm_file_drops += (rt_uint32_t)(bytes - remain);

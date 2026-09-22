@@ -48,8 +48,6 @@ int main(void)
         health_check_ready = RT_FALSE;
     }
     boot_prompt_play_once();
-    /* 提示音是同步阻塞播放的，返回即代表播放完成。
-     * 通知 LVGL 线程可以淡出欢迎界面、切换到主界面。 */
     mylvgl_notify_boot_prompt_done();
 
     if (bt__init() != RT_EOK)
@@ -75,7 +73,6 @@ int main(void)
         /* 核心服务稳定后再确认试运行镜像，避免新版本过早失去回滚机会。 */
         boot_ota_schedule_confirmation(3000U);
     }
-    rt_kprintf("hello world，This is Haha2!\r\n");
     while (1)
     {
         boot_ota_poll();
@@ -84,3 +81,6 @@ int main(void)
 
     return RT_EOK;
 }
+
+
+

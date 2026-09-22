@@ -20,7 +20,6 @@
 #define DBG_LVL DBG_WARNING
 #include <rtdbg.h>
 
-/* 配色沿用 welcome / 旧 main 的深蓝体系 */
 #define GUI_MAIN_BG_COLOR              0x101A33
 #define GUI_MAIN_DISC_COLOR            0x1C2A4A
 #define GUI_MAIN_DISC_RING_COLOR       0x35527E
@@ -47,8 +46,8 @@
 typedef struct
 {
     lv_obj_t *screen;
-    lv_obj_t *disc;           /* 圆盘底座(不转) */
-    lv_obj_t *disc_dot;       /* 边缘高亮点,绕圆心转 */
+    lv_obj_t *disc;
+    lv_obj_t *disc_dot;
     lv_obj_t *title_label;
     lv_obj_t *artist_label;
     lv_obj_t *time_cur_label;
@@ -57,7 +56,7 @@ typedef struct
     lv_obj_t *status_label;
     lv_timer_t *refresh_timer;
     rt_bool_t disc_spinning;
-    int32_t disc_angle_deg;   /* 当前角度 0~359 */
+    int32_t disc_angle_deg;
     char last_title[GUI_MAIN_TEXT_CMP_MAX];
     char last_artist[GUI_MAIN_TEXT_CMP_MAX];
     char last_status[GUI_MAIN_TEXT_CMP_MAX];
@@ -82,7 +81,6 @@ static void gui_main_place_disc_dot(int32_t angle_deg)
         return;
     }
 
-    /* 点中心所在圆周半径: 圆盘半径 - 边距 - 点半径 */
     radius = (GUI_MAIN_DISC_SIZE / 2) - 8 - (GUI_MAIN_DISC_DOT_SIZE / 2);
     cx = GUI_MAIN_DISC_SIZE / 2;
     cy = GUI_MAIN_DISC_SIZE / 2;
@@ -133,7 +131,6 @@ static void gui_main_disc_angle_cb(void *obj, int32_t step)
 
     LV_UNUSED(obj);
 
-    /* step 为 0..36 的步进序号,换算成 10° 一格的角度 */
     angle = (step % GUI_MAIN_DISC_STEPS) * GUI_MAIN_DISC_STEP_DEG;
     if (angle < 0)
     {
@@ -253,7 +250,6 @@ static rt_bool_t gui_main_meta_is_unavailable(const char *text)
 static const char *gui_main_status_text(bt_avrcp_ct_link_state_t link_state,
                                         bt_avrcp_ct_playback_state_t playback_state)
 {
-    /* PTT 长按采集优先显示 */
     if (control_app_is_capturing())
     {
         return "正在说话...";
@@ -424,10 +420,8 @@ static lv_obj_t *gui_main_create_disc(lv_obj_t *parent)
     lv_obj_set_style_border_color(disc, lv_color_hex(GUI_MAIN_DISC_RING_COLOR), 0);
     lv_obj_set_style_border_opa(disc, LV_OPA_COVER, 0);
     lv_obj_clear_flag(disc, LV_OBJ_FLAG_SCROLLABLE);
-    /* 子对象用绝对坐标摆点,关闭布局干扰 */
     lv_obj_add_flag(disc, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
 
-    /* 内环装饰 */
     ring = lv_obj_create(disc);
     lv_obj_remove_style_all(ring);
     lv_obj_set_size(ring, GUI_MAIN_DISC_SIZE - 18, GUI_MAIN_DISC_SIZE - 18);
@@ -439,7 +433,6 @@ static lv_obj_t *gui_main_create_disc(lv_obj_t *parent)
     lv_obj_center(ring);
     lv_obj_clear_flag(ring, LV_OBJ_FLAG_SCROLLABLE);
 
-    /* 中心轴 */
     hub = lv_obj_create(disc);
     lv_obj_remove_style_all(hub);
     lv_obj_set_size(hub, GUI_MAIN_DISC_INNER_SIZE, GUI_MAIN_DISC_INNER_SIZE);
@@ -451,7 +444,6 @@ static lv_obj_t *gui_main_create_disc(lv_obj_t *parent)
     lv_obj_center(hub);
     lv_obj_clear_flag(hub, LV_OBJ_FLAG_SCROLLABLE);
 
-    /* 边缘高亮点: 绕圆心转,表示“碟片在转” */
     s_main.disc_dot = lv_obj_create(disc);
     lv_obj_remove_style_all(s_main.disc_dot);
     lv_obj_set_size(s_main.disc_dot, GUI_MAIN_DISC_DOT_SIZE, GUI_MAIN_DISC_DOT_SIZE);
@@ -490,11 +482,9 @@ lv_obj_t *gui_main_create(void)
     lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
     lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
 
-    /* ---- 圆盘 ---- */
     s_main.disc = gui_main_create_disc(scr);
     lv_obj_align(s_main.disc, LV_ALIGN_TOP_MID, 0, 12);
 
-    /* ---- 歌名 ---- */
     s_main.title_label = lv_label_create(scr);
     lv_label_set_text(s_main.title_label, "等待连接");
     lv_obj_set_width(s_main.title_label, 280);
@@ -505,7 +495,6 @@ lv_obj_t *gui_main_create(void)
     lv_obj_clear_flag(s_main.title_label, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_align(s_main.title_label, LV_ALIGN_TOP_MID, 0, 110);
 
-    /* ---- 歌手 ---- */
     s_main.artist_label = lv_label_create(scr);
     lv_label_set_text(s_main.artist_label, "请用手机连接本设备");
     lv_obj_set_width(s_main.artist_label, 280);
@@ -516,7 +505,6 @@ lv_obj_t *gui_main_create(void)
     lv_obj_clear_flag(s_main.artist_label, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_align(s_main.artist_label, LV_ALIGN_TOP_MID, 0, 132);
 
-    /* ---- 进度行: 当前时间 | bar | 总时长 ---- */
     progress_row = lv_obj_create(scr);
     lv_obj_remove_style_all(progress_row);
     lv_obj_set_size(progress_row, 292, 22);
@@ -553,7 +541,6 @@ lv_obj_t *gui_main_create(void)
     lv_obj_set_style_text_align(s_main.time_total_label, LV_TEXT_ALIGN_RIGHT, 0);
     lv_obj_set_width(s_main.time_total_label, 40);
 
-    /* ---- 底部状态 ---- */
     s_main.status_label = lv_label_create(scr);
     lv_label_set_text(s_main.status_label, "未连接蓝牙");
     lv_obj_set_width(s_main.status_label, 280);

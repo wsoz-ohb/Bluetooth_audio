@@ -127,7 +127,6 @@ rt_err_t fs_app_init(void)
         return -RT_ERROR;
     }
 
-    /* 设备名 = 分区名 "filesystem" */
     mtd = fal_mtd_nor_device_create(FS_FAL_PART_NAME);
     if (mtd == RT_NULL)
     {

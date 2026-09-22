@@ -206,6 +206,8 @@
 
 /* tools packages */
 
+#define PKG_USING_CPU_USAGE
+#define PKG_USING_CPU_USAGE_LATEST_VERSION
 /* end of tools packages */
 
 /* system packages */
@@ -285,6 +287,10 @@
 /* HPMicro SDK */
 
 /* end of HPMicro SDK */
+
+/* FM33 Drivers */
+
+/* end of FM33 Drivers */
 
 /* FT32 HAL & SDK Drivers */
 

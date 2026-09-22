@@ -41,12 +41,6 @@ typedef enum
     ES8311_AUDIO_DMA_MODE_DUPLEX,
 } es8311_audio_dma_mode_t;
 
-// 统一音频会话上下文。
-// 这个文件不把播放/采集拆成两个独立状态机，而是集中在一个上下文里维护：
-// - 当前 I2S/DMA 工作模式
-// - Mixer playback renderer / capture ring buffer
-// - codec 当前 sample rate
-// - 采集 slot 自动选择结果
 typedef struct
 {
     DMA_HandleTypeDef hdma_i2s2_rx;
@@ -481,7 +475,7 @@ static rt_err_t es8311_audio_i2s_reconfigure(rt_uint32_t sample_rate)
     return RT_EOK;
 }
 
-static void es8311_audio_fill_tx_range(rt_size_t offset_frames, rt_size_t frames)   //填充TX_DMA缓冲区
+static void es8311_audio_fill_tx_range(rt_size_t offset_frames, rt_size_t frames)
 {
     rt_uint32_t rendered_frames;
     rt_size_t total_samples;
@@ -497,10 +491,9 @@ static void es8311_audio_fill_tx_range(rt_size_t offset_frames, rt_size_t frames
         !es8311_audio_ctx.playback_start_pending &&
         (es8311_audio_ctx.playback_renderer != RT_NULL))
     {
-        //audio_mixer_render_stereo本质上就等于，返回被填了多少帧
         rendered_frames = es8311_audio_ctx.playback_renderer(target,
                                                              (rt_uint32_t) frames,
-                                                             es8311_audio_ctx.playback_renderer_context);       //回调向MIXER申请写入数据
+                                                             es8311_audio_ctx.playback_renderer_context);
         if (rendered_frames > frames)
         {
             rendered_frames = (rt_uint32_t) frames;
@@ -508,7 +501,6 @@ static void es8311_audio_fill_tx_range(rt_size_t offset_frames, rt_size_t frames
     }
     rendered_samples = (rt_size_t) rendered_frames * ES8311_AUDIO_PLAYBACK_OUTPUT_CHANNELS;
 
-    //gain ramp解决爆音问题
     /* Keep the startup ramp continuous across DMA halves, with equal L/R gain. */
     for (sample_index = 0u;
          (sample_index < rendered_samples) &&
@@ -638,9 +630,6 @@ static void es8311_audio_write_capture_mono(const rt_uint16_t * source, rt_uint3
 
 static void es8311_audio_process_dma_half(rt_size_t offset_frames)
 {
-    // 同一个 DMA half 完成两件事：
-    // 1. 给 TX half 补下一段播放数据
-    // 2. 从 RX half 抽取一段采集数据
     es8311_audio_fill_tx_range(offset_frames, ES8311_AUDIO_DMA_HALF_FRAMES);
     es8311_audio_write_capture_mono(&es8311_audio_dma_rx_buffer[offset_frames * ES8311_AUDIO_PLAYBACK_OUTPUT_CHANNELS],
                                     ES8311_AUDIO_DMA_HALF_FRAMES);
@@ -1050,7 +1039,7 @@ rt_bool_t es8311_audio_is_playback_running(void)
     return running;
 }
 
-rt_err_t es8311_audio_start_capture(void)   //开始进入采集
+rt_err_t es8311_audio_start_capture(void)
 {
     rt_base_t level;
 
@@ -1071,13 +1060,13 @@ rt_err_t es8311_audio_start_capture(void)   //开始进入采集
 
     if (es8311_audio_ctx.dma_mode == ES8311_AUDIO_DMA_MODE_STOPPED)
     {
-        if (es8311_audio_start_duplex_dma() != RT_EOK)  //启动全双工模式
+        if (es8311_audio_start_duplex_dma() != RT_EOK)
         {
             return -RT_ERROR;
         }
     }
 
-    if (es8311_start_record() != RT_EOK)    //启动ES8311的录音采集
+    if (es8311_start_record() != RT_EOK)
     {
         LOG_E("es8311_start_record failed");
         es8311_audio_stop_dma();
@@ -1235,7 +1224,7 @@ void HAL_I2SEx_TxRxCpltCallback(I2S_HandleTypeDef * hi2s)
     es8311_audio_process_dma_half(ES8311_AUDIO_DMA_HALF_FRAMES);
 }
 
-void HAL_I2S_TxHalfCpltCallback(I2S_HandleTypeDef * hi2s)   //发送完一半的DMA缓冲区后回调
+void HAL_I2S_TxHalfCpltCallback(I2S_HandleTypeDef * hi2s)
 {
     if (hi2s != &hi2s2)
     {
@@ -1250,7 +1239,7 @@ void HAL_I2S_TxHalfCpltCallback(I2S_HandleTypeDef * hi2s)   //发送完一半的
     es8311_audio_fill_tx_range(0u, ES8311_AUDIO_DMA_HALF_FRAMES);
 }
 
-void HAL_I2S_TxCpltCallback(I2S_HandleTypeDef * hi2s)   //发送完的DMA缓冲区后回调
+void HAL_I2S_TxCpltCallback(I2S_HandleTypeDef * hi2s)
 {
     if (hi2s != &hi2s2)
     {

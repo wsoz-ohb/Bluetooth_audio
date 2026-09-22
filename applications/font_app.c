@@ -51,10 +51,10 @@ struct font_ctx
 {
     const struct fal_partition *part;
     rt_uint32_t                 glyph_cnt;
-    rt_uint16_t                *index;      /* RAM 缓存的索引表,glyph_cnt 项 */
+    rt_uint16_t                *index;
     rt_bool_t                   ready;
     lv_font_t                    font;
-    rt_uint8_t                   bitmap_buf[FONT_BYTES_PER_GLYPH];  /* 32B 静态 */
+    rt_uint8_t                   bitmap_buf[FONT_BYTES_PER_GLYPH];
 };
 
 static struct font_ctx s_ctx;
@@ -65,7 +65,6 @@ static rt_uint32_t le32(const rt_uint8_t *p)
            ((rt_uint32_t)p[2] << 16) | ((rt_uint32_t)p[3] << 24);
 }
 
-/* 二分查找 Unicode 码点在索引表中的下标,未命中返回 -1 */
 static rt_int32_t font_find_glyph(rt_uint32_t letter)
 {
     rt_int32_t lo = 0;
@@ -196,7 +195,6 @@ rt_err_t font_app_init(void)
     }
     s_ctx.glyph_cnt = cnt;
 
-    /* 缓存索引表: 7540*2 = 15KB,堆宽裕(~80KB),值得换"二分走内存"的零延迟 */
     s_ctx.index = (rt_uint16_t *)rt_malloc(cnt * 2);
     if (s_ctx.index == RT_NULL)
     {
@@ -213,7 +211,7 @@ rt_err_t font_app_init(void)
         return -RT_EIO;
     }
 
-    /* 填充 lv_font_t。fallback=NULL:缺字时 LVGL 自行画占位符,不串到英文字体 */
+    /* fallback=NULL 时缺字由 LVGL 绘制占位符。 */
     s_ctx.font.get_glyph_dsc    = font_get_glyph_dsc_cb;
     s_ctx.font.get_glyph_bitmap = font_get_glyph_bitmap_cb;
     s_ctx.font.line_height      = FONT_LINE_HEIGHT;

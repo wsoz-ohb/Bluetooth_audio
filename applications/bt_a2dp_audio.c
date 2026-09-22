@@ -70,7 +70,6 @@ static void bt_a2dp_audio_handle_pcm(int16_t * data,
               sample_rate);
     }
 
-    /* 解码层只把 PCM 写入背景音源，混音和 ES8311 输出由 Mixer 统一负责。 */
     written_frames = audio_mixer_write(AUDIO_MIXER_SOURCE_BACKGROUND,
                                        data,
                                        (rt_uint32_t) num_samples,

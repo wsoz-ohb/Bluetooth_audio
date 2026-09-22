@@ -7,28 +7,6 @@
  * Date           Author       Notes
  * 2026-07-26     26410       YMODEM receive font.bin into FAL "font" partition
  *
- * 踩坑记录(YMODEM 烧字库，排查顺序，勿随便删):
- * 1) 现象：YMODEM 传输字节计数 256376 全对(零重传)、CRC16 全 ACK，但落盘后
- *    font_read_header 读到 bad magic，分区开头还是上一任 OTA demo 的旧数据
- *    "OTA0 A5 A5 A5 A5 ..."。
- * 2) 排除上位机：MobaXterm 和自写 Python sender 两个独立实现结果一致；
- *    YMODEM 停等+每包 CRC16，零重传即证明到板子内存的数据比特级正确。
- * 3) 排除接收代码：received 字节数精确命中，说明 rym 回调+4KB 聚合+截断逻辑全对。
- * 4) 排除 SPI1 总线竞争：font_update 期间持有 rt_spi_take_bus 锁，LCD 被挡，
- *    且校验读在锁释放后是单次原子读，LCD 无法插入。
- * 5) 定位：fal read 0 16 连读四遍完全一致 -> 读稳定，非信号完整性/20MHz 问题；
- *    fal erase + fal write 报 success 但内容纹丝不动 -> 写入被芯片静默丢弃。
- * 6) 真凶：sf status 读出 0x3C，BP 位(TB/BP3..BP0)全置位=整片写保护。
- *    W25Q 系列对受保护区域的 PROGRAM/ERASE 静默丢弃不报错，读完全正常。
- *    sf status 0 00 清零后一切正常。
- *    该解除逻辑已固化到 sfud_app_init()，开机自动执行(见 sfud_app.c)。
- *
- * 用法:
- *   msh> font_update          进入 YMODEM 接收,然后在终端(MobaXterm/XShell/
- *                             Tera Term)选择 "YMODEM 发送" 传 fontlib/font.bin
- *   msh> font_info            读取分区内字库头部并做 CRC32 完整性校验
- *
- * 依赖: RT_USING_FAL + RT_USING_RYM(menuconfig: Utilities -> YMODEM)
  */
 #include <rtthread.h>
 #include <rtdevice.h>
@@ -60,8 +38,6 @@ struct font_header
     rt_uint32_t glyph_cnt;
     rt_uint32_t crc32;          /* 覆盖索引表+点阵区(不含头部) */
 };
-
-/* ---------------- CRC32 (zlib 多项式 0xEDB88320, 流式) ---------------- */
 
 static rt_uint32_t font_crc32_update(rt_uint32_t state, const rt_uint8_t *data, rt_size_t len)
 {
@@ -104,7 +80,6 @@ static const struct fal_partition *font_part_get(void)
     return part;
 }
 
-/* 读头部并解析,成功返回 RT_EOK 且填充 hdr */
 static rt_err_t font_read_header(const struct fal_partition *part, struct font_header *hdr)
 {
     rt_uint8_t raw[FONT_HEADER_SIZE];
@@ -222,8 +197,6 @@ MSH_CMD_EXPORT(font_info, show and verify font partition content);
 
 #include <ymodem.h>
 
-/* ---------------- YMODEM 接收上下文 ---------------- */
-
 struct font_rym_ctx
 {
     struct rym_ctx parent;
@@ -331,7 +304,7 @@ static enum rym_code font_rym_on_end(struct rym_ctx *ctx, rt_uint8_t *buf, rt_si
     (void)buf;
     (void)len;
 
-    font_rym_flush_block();     /* 落盘最后不足 4KB 的尾巴 */
+    font_rym_flush_block();
     return RYM_CODE_ACK;
 }
 

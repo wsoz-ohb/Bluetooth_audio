@@ -415,14 +415,14 @@ rt_uint32_t audio_mixer_write(audio_mixer_source_t source,
         return 0u;
     }
 
-    ring = &audio_mixer_ctx.source[source]; //确定写入的一个缓存空间通过source
+    ring = &audio_mixer_ctx.source[source];
     start_frame = 0u;
     frames_to_write = frames;
     written_frames = 0u;
     log_overflow = RT_FALSE;
     notify_ready = RT_FALSE;
 
-    if (frames_to_write > ring->capacity_frames)    //写入大于总容量，丢掉本次传入 PCM 中最前面的数据，只保留本次输入最新的 capacity_frames 帧
+    if (frames_to_write > ring->capacity_frames)
     {
         start_frame = frames_to_write - ring->capacity_frames;
         frames_to_write = ring->capacity_frames;
@@ -439,7 +439,7 @@ rt_uint32_t audio_mixer_write(audio_mixer_source_t source,
         return 0u;
     }
 
-    if ((ring->capacity_frames - ring->level_frames) < frames_to_write)     //丢弃旧数据，写入太大
+    if ((ring->capacity_frames - ring->level_frames) < frames_to_write)
     {
         audio_mixer_drop_oldest_locked(source,
                                        frames_to_write - (ring->capacity_frames - ring->level_frames));
@@ -450,15 +450,15 @@ rt_uint32_t audio_mixer_write(audio_mixer_source_t source,
         }
     }
 
-    for (frame_index = start_frame; frame_index < (start_frame + frames_to_write); frame_index++)   //逐帧复制到buffer
+    for (frame_index = start_frame; frame_index < (start_frame + frames_to_write); frame_index++)
     {
-        if (source == AUDIO_MIXER_SOURCE_BACKGROUND)    //背景音（音乐）
+        if (source == AUDIO_MIXER_SOURCE_BACKGROUND)
         {
             rt_int16_t left;
             rt_int16_t right;
             rt_uint32_t buffer_index;
 
-            if (channels == 1u) //单声道和双声道
+            if (channels == 1u)
             {
                 left = pcm[frame_index];
                 right = left;
@@ -473,7 +473,7 @@ rt_uint32_t audio_mixer_write(audio_mixer_source_t source,
             audio_mixer_background_buffer[buffer_index] = left;
             audio_mixer_background_buffer[buffer_index + 1u] = right;
         }
-        else    //AI语音（单声道）
+        else
         {
             audio_mixer_voice_buffer[ring->write_frame] = pcm[frame_index];
         }
@@ -499,7 +499,7 @@ rt_uint32_t audio_mixer_write(audio_mixer_source_t source,
         /* 与 source stop 串行化，避免 ready 判定后、DMA 启动前被 stop 穿插。 */
         rt_mutex_take(&audio_mixer_session_mutex, RT_WAITING_FOREVER);
         level = rt_hw_interrupt_disable();
-        notify_ready = audio_mixer_playback_ready_locked(); //检查是不是达到了启播水位
+        notify_ready = audio_mixer_playback_ready_locked();
         rt_hw_interrupt_enable(level);
         if (notify_ready)
         {
@@ -543,7 +543,7 @@ rt_uint32_t audio_mixer_get_source_free_frames(audio_mixer_source_t source)
     return frames;
 }
 
-rt_uint32_t audio_mixer_render_stereo(rt_int16_t * pcm, rt_uint32_t frames, void * context) //DMA来拉去，内部消费混音
+rt_uint32_t audio_mixer_render_stereo(rt_int16_t * pcm, rt_uint32_t frames, void * context)
 {
     audio_mixer_ring_t * background;
     audio_mixer_ring_t * voice;
@@ -576,14 +576,14 @@ rt_uint32_t audio_mixer_render_stereo(rt_int16_t * pcm, rt_uint32_t frames, void
         background_right = 0;
         voice_sample = 0;
         voice_has_frame = RT_FALSE;
-        //找两个音频，然后消费一帧
-        if (background->active && (background->level_frames > 0u))  //音乐双声道
+
+        if (background->active && (background->level_frames > 0u))
         {
             rt_uint32_t buffer_index;
 
             buffer_index = background->read_frame * AUDIO_MIXER_OUTPUT_CHANNELS;
-            background_left = audio_mixer_background_buffer[buffer_index];  //取出一帧
-            background_right = audio_mixer_background_buffer[buffer_index + 1u];    //取出一帧
+            background_left = audio_mixer_background_buffer[buffer_index];
+            background_right = audio_mixer_background_buffer[buffer_index + 1u];
             background->read_frame++;
             if (background->read_frame >= background->capacity_frames)
             {
@@ -593,10 +593,10 @@ rt_uint32_t audio_mixer_render_stereo(rt_int16_t * pcm, rt_uint32_t frames, void
             background->overflow_logged = RT_FALSE;
         }
 
-        if (voice->active && (voice->level_frames > 0u))    //AI语音
+        if (voice->active && (voice->level_frames > 0u))
         {
-            voice_sample = audio_mixer_voice_buffer[voice->read_frame]; //取出一帧
-            voice_has_frame = RT_TRUE;      //标记有音频帧
+            voice_sample = audio_mixer_voice_buffer[voice->read_frame];
+            voice_has_frame = RT_TRUE;
             voice->read_frame++;
             if (voice->read_frame >= voice->capacity_frames)
             {
@@ -606,7 +606,7 @@ rt_uint32_t audio_mixer_render_stereo(rt_int16_t * pcm, rt_uint32_t frames, void
             voice->overflow_logged = RT_FALSE;
         }
 
-        if (background->active && voice_has_frame)  //Duck，就是让音乐在AI语音存在时降低音量，AI语音不受影响，不存在时正常
+        if (background->active && voice_has_frame)
         {
             audio_mixer_ctx.duck_q15 += AUDIO_MIXER_DUCK_ATTACK_STEP_Q15;
             if (audio_mixer_ctx.duck_q15 > AUDIO_MIXER_Q15_ONE)
@@ -626,9 +626,9 @@ rt_uint32_t audio_mixer_render_stereo(rt_int16_t * pcm, rt_uint32_t frames, void
         /* A2DP 音量和 Duck 都只作用于背景音，AI 语音不受手机音量影响。 */
         background_duck_gain_q15 = AUDIO_MIXER_Q15_ONE -
             ((audio_mixer_ctx.duck_q15 *
-              (AUDIO_MIXER_Q15_ONE - AUDIO_MIXER_DUCK_BACKGROUND_GAIN_Q15)) >> 15); //用Q15来描述Duck的音量，Q15是定点数表示法，范围是0到32768，表示0到1的范围。这里计算了背景音的衰减增益。
+              (AUDIO_MIXER_Q15_ONE - AUDIO_MIXER_DUCK_BACKGROUND_GAIN_Q15)) >> 15);
         background_gain_q15 =
-            (audio_mixer_ctx.background_gain_q15 * background_duck_gain_q15) >> 15; //手机音量增益*duck增益，>>15是因为Q15表示法，两个Q15相乘后需要右移15位才能得到正确的结果。
+            (audio_mixer_ctx.background_gain_q15 * background_duck_gain_q15) >> 15;
 
         mixed_left = ((background_left * background_gain_q15) >> 15) +
                      voice_sample;
@@ -636,7 +636,7 @@ rt_uint32_t audio_mixer_render_stereo(rt_int16_t * pcm, rt_uint32_t frames, void
                       voice_sample;
 
         pcm[(rt_size_t) frame_index * AUDIO_MIXER_OUTPUT_CHANNELS] =
-            audio_mixer_saturate_s16(mixed_left);   //限幅
+            audio_mixer_saturate_s16(mixed_left);
         pcm[(rt_size_t) frame_index * AUDIO_MIXER_OUTPUT_CHANNELS + 1u] =
             audio_mixer_saturate_s16(mixed_right);
     }
@@ -653,7 +653,7 @@ rt_err_t boot_prompt_play_once(void)
 #define BOOT_PROMPT_TAIL_SILENCE_FRAMES 2048u
 #define BOOT_PROMPT_STOP_LEVEL_FRAMES   512u
 #define BOOT_PROMPT_WAIT_MS             2u
-#define BOOT_PROMPT_VOLUME_PERCENT      0   //10
+#define BOOT_PROMPT_VOLUME_PERCENT      0
 
     static const rt_int16_t boot_prompt_silence[BOOT_PROMPT_CHUNK_FRAMES] = {0};
     rt_int16_t scaled_pcm[BOOT_PROMPT_CHUNK_FRAMES];

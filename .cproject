@@ -160,6 +160,8 @@
                   <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/LVGL-v8.3.11/src/misc}&quot;" />
                   <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/LVGL-v8.3.11/src/widgets}&quot;" />
                   <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/LVGL-v8.3.11/src}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/cpu_usage-latest}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/littlefs-v2.5.0}&quot;" />
                   <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//rt-thread/components/dfs/include}&quot;" />
                   <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//rt-thread/components/drivers/include}&quot;" />
                   <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//rt-thread/components/drivers/spi/sfud/inc}&quot;" />
@@ -333,6 +335,8 @@
                   <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/LVGL-v8.3.11/src/misc}&quot;" />
                   <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/LVGL-v8.3.11/src/widgets}&quot;" />
                   <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/LVGL-v8.3.11/src}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/cpu_usage-latest}&quot;" />
+                  <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//packages/littlefs-v2.5.0}&quot;" />
                   <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//rt-thread/components/dfs/include}&quot;" />
                   <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//rt-thread/components/drivers/include}&quot;" />
                   <listOptionValue builtIn="false" value="&quot;${workspace_loc://${ProjName}//rt-thread/components/drivers/spi/sfud/inc}&quot;" />

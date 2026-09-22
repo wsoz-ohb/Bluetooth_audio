@@ -51,7 +51,6 @@ static bt_avrcp_ct_link_state_t bt_avrcp_ct_link_state = BT_AVRCP_CT_LINK_STATE_
 static bt_avrcp_ct_playback_state_t bt_avrcp_ct_playback_state = BT_AVRCP_CT_PLAYBACK_STATE_UNKNOWN;
 static bt_avrcp_ct_op_state_t bt_avrcp_ct_op_state = BT_AVRCP_CT_OP_STATE_IDLE;
 static rt_bool_t bt_avrcp_ct_playback_status_notify_enabled = RT_FALSE;
-/* 当前曲目总时长/进度缓存，供 pos 日志与 GUI 进度条使用。 */
 static uint32_t bt_avrcp_ct_song_length_ms = 0u;
 static uint32_t bt_avrcp_ct_song_position_ms = 0u;
 /* Now Playing 文本缓存（手机侧通常 UTF-8）。 */
@@ -405,7 +404,6 @@ static void bt_avrcp_ct_sync_remote_playback_state(void)
     }
 
     bt_avrcp_ct_set_playback_notify_enabled(RT_FALSE);  
-    //注册播放状态变化通知
     status = avrcp_controller_enable_notification(bt_avrcp_ct_cid,
                                                   AVRCP_NOTIFICATION_EVENT_PLAYBACK_STATUS_CHANGED);
     if (status != ERROR_CODE_SUCCESS)
@@ -447,7 +445,7 @@ static void bt_avrcp_ct_sync_remote_playback_state(void)
         LOG_I("AVRCP track changed notification requested, cid=0x%04x", bt_avrcp_ct_cid);
     }
 
-    /* 状态与进度以 bfe99a6 的通知路径为准，避免主动查询的过渡态覆盖通知。 */
+    /* 状态与进度以通知为准，避免主动查询的过渡态覆盖通知。 */
 }
 
 static const char * bt_avrcp_ct_operation_name(uint8_t operation_id)
@@ -845,7 +843,6 @@ static void bt_avrcp_ct_apply_absolute_volume(uint16_t avrcp_cid, uint8_t volume
           (unsigned int)((volume * 100u) / 127u));
 }
 
-/* 本地旋钮调整绝对音量：改本地增益，并通知手机音量条。 */
 static void bt_avrcp_ct_apply_local_absolute_volume_delta(int16_t delta)
 {
     int32_t volume;
@@ -937,7 +934,6 @@ static rt_err_t bt_avrcp_ct_post_abs_volume_delta(int16_t delta)
     level = rt_hw_interrupt_disable();
     bt_avrcp_ct_abs_volume_pending_delta =
         (int16_t)(bt_avrcp_ct_abs_volume_pending_delta + delta);
-    /* 防止连拧把 pending 顶得过大。 */
     if (bt_avrcp_ct_abs_volume_pending_delta > 127)
     {
         bt_avrcp_ct_abs_volume_pending_delta = 127;
@@ -985,12 +981,11 @@ void btstack_event_avrcp_controller_handler(uint8_t packet_type, uint16_t channe
     pump_now_playing = RT_FALSE;
     switch (event) 
     {
-    case AVRCP_SUBEVENT_CONNECTION_ESTABLISHED:  // AVRCP 连接建立
+    case AVRCP_SUBEVENT_CONNECTION_ESTABLISHED:
     {
         bd_addr_t remote_addr;
         uint8_t status;
 
-        //状态打印
         status = avrcp_subevent_connection_established_get_status(packet);
         avrcp_subevent_connection_established_get_bd_addr(packet, remote_addr);
         if (status != ERROR_CODE_SUCCESS)
@@ -1000,7 +995,6 @@ void btstack_event_avrcp_controller_handler(uint8_t packet_type, uint16_t channe
                   bd_addr_to_str(remote_addr));
             break;
         }
-        //记录CID，记录本地状态机
         bt_avrcp_ct_cid = avrcp_subevent_connection_established_get_avrcp_cid(packet);
         bt_avrcp_ct_set_link_state(BT_AVRCP_CT_LINK_STATE_CONNECTED);
         bt_avrcp_ct_set_playback_state(BT_AVRCP_CT_PLAYBACK_STATE_UNKNOWN);
@@ -1035,11 +1029,11 @@ void btstack_event_avrcp_controller_handler(uint8_t packet_type, uint16_t channe
                   bt_avrcp_ct_cid,
                   audio_mixer_get_background_volume());
         }
-        bt_avrcp_ct_sync_remote_playback_state();   //同步远程播放状态
+        bt_avrcp_ct_sync_remote_playback_state();
         break;
     }
 
-    case AVRCP_SUBEVENT_CONNECTION_RELEASED:  // AVRCP 连接断开
+    case AVRCP_SUBEVENT_CONNECTION_RELEASED:
     {
         uint16_t cid;
 
@@ -1053,7 +1047,7 @@ void btstack_event_avrcp_controller_handler(uint8_t packet_type, uint16_t channe
         break;
     }
 
-    case AVRCP_SUBEVENT_OPERATION_START:  // 操作开始(按键按下等)
+    case AVRCP_SUBEVENT_OPERATION_START:
     {
         uint8_t operation_id;
 
@@ -1066,7 +1060,7 @@ void btstack_event_avrcp_controller_handler(uint8_t packet_type, uint16_t channe
         break;
     }
 
-    case AVRCP_SUBEVENT_OPERATION_COMPLETE:  // 操作完成应答
+    case AVRCP_SUBEVENT_OPERATION_COMPLETE:
     {
         uint8_t operation_id;
 
@@ -1083,7 +1077,7 @@ void btstack_event_avrcp_controller_handler(uint8_t packet_type, uint16_t channe
         break;
     }
 
-    case AVRCP_SUBEVENT_OPERATION:  // Target 侧按键操作事件
+    case AVRCP_SUBEVENT_OPERATION:
     {
         uint8_t operation_id;
 
@@ -1097,7 +1091,7 @@ void btstack_event_avrcp_controller_handler(uint8_t packet_type, uint16_t channe
         break;
     }
 
-    case AVRCP_SUBEVENT_PLAY_STATUS:  // 播放状态查询结果(含进度/总时长)
+    case AVRCP_SUBEVENT_PLAY_STATUS:
     {
         uint8_t play_status;
 
@@ -1116,7 +1110,7 @@ void btstack_event_avrcp_controller_handler(uint8_t packet_type, uint16_t channe
         break;
     }
 
-    case AVRCP_SUBEVENT_NOTIFICATION_STATE:  // 通知注册结果(成功/失败)
+    case AVRCP_SUBEVENT_NOTIFICATION_STATE:
     {
         uint8_t event_id;
         uint8_t enabled;
@@ -1138,7 +1132,7 @@ void btstack_event_avrcp_controller_handler(uint8_t packet_type, uint16_t channe
         break;
     }
 
-    case AVRCP_SUBEVENT_NOTIFICATION_PLAYBACK_STATUS_CHANGED:  // 播放状态变化通知(播/停/暂停)
+    case AVRCP_SUBEVENT_NOTIFICATION_PLAYBACK_STATUS_CHANGED:
     {
         uint8_t play_status;
 
@@ -1153,7 +1147,7 @@ void btstack_event_avrcp_controller_handler(uint8_t packet_type, uint16_t channe
         break;
     }
 
-    case AVRCP_SUBEVENT_NOTIFICATION_TRACK_CHANGED:  // 当前曲目切换通知
+    case AVRCP_SUBEVENT_NOTIFICATION_TRACK_CHANGED:
     {
         const uint8_t * identifier;
 
@@ -1163,17 +1157,16 @@ void btstack_event_avrcp_controller_handler(uint8_t packet_type, uint16_t channe
               avrcp_subevent_notification_track_changed_get_command_type(packet),
               identifier[0], identifier[1], identifier[2], identifier[3],
               identifier[4], identifier[5], identifier[6], identifier[7]);
-        /* 换歌后总时长/元数据先清空，等 Now Playing / play_status 再更新。 */
         bt_avrcp_ct_set_song_length_ms(0u);
         bt_avrcp_ct_set_song_position_ms(0u);
         bt_avrcp_ct_clear_now_playing_text();
-        /* 保持 bfe99a6 的切歌时序：只拉元数据，播放状态和进度由通知更新。 */
+        /* 只拉元数据，播放状态和进度由通知更新。 */
         bt_avrcp_ct_queue_now_playing_info("track_changed");
         pump_now_playing = RT_TRUE;
         break;
     }
 
-    case AVRCP_SUBEVENT_NOTIFICATION_PLAYBACK_POS_CHANGED:  // 播放进度变化通知
+    case AVRCP_SUBEVENT_NOTIFICATION_PLAYBACK_POS_CHANGED:
     {
         uint32_t position_ms;
 
@@ -1185,33 +1178,33 @@ void btstack_event_avrcp_controller_handler(uint8_t packet_type, uint16_t channe
         break;
     }
 
-    case AVRCP_SUBEVENT_NOTIFICATION_EVENT_TRACK_REACHED_END:  // 曲目播放到结尾
+    case AVRCP_SUBEVENT_NOTIFICATION_EVENT_TRACK_REACHED_END:
         LOG_I("AVRCP track reached end, cid=0x%04x, ctype=0x%02x",
               avrcp_subevent_notification_event_track_reached_end_get_avrcp_cid(packet),
               avrcp_subevent_notification_event_track_reached_end_get_command_type(packet));
         break;
 
-    case AVRCP_SUBEVENT_NOTIFICATION_EVENT_TRACK_REACHED_START:  // 曲目回到开头
+    case AVRCP_SUBEVENT_NOTIFICATION_EVENT_TRACK_REACHED_START:
         LOG_I("AVRCP track reached start, cid=0x%04x, ctype=0x%02x",
               avrcp_subevent_notification_event_track_reached_start_get_avrcp_cid(packet),
               avrcp_subevent_notification_event_track_reached_start_get_command_type(packet));
         break;
 
-    case AVRCP_SUBEVENT_NOTIFICATION_EVENT_BATT_STATUS_CHANGED:  // 对端电量状态变化
+    case AVRCP_SUBEVENT_NOTIFICATION_EVENT_BATT_STATUS_CHANGED:
         LOG_I("AVRCP battery status changed, cid=0x%04x, ctype=0x%02x, battery=0x%02x",
               avrcp_subevent_notification_event_batt_status_changed_get_avrcp_cid(packet),
               avrcp_subevent_notification_event_batt_status_changed_get_command_type(packet),
               avrcp_subevent_notification_event_batt_status_changed_get_battery_status(packet));
         break;
 
-    case AVRCP_SUBEVENT_NOTIFICATION_EVENT_SYSTEM_STATUS_CHANGED:  // 系统状态变化
+    case AVRCP_SUBEVENT_NOTIFICATION_EVENT_SYSTEM_STATUS_CHANGED:
         LOG_I("AVRCP system status changed, cid=0x%04x, ctype=0x%02x, system=0x%02x",
               avrcp_subevent_notification_event_system_status_changed_get_avrcp_cid(packet),
               avrcp_subevent_notification_event_system_status_changed_get_command_type(packet),
               avrcp_subevent_notification_event_system_status_changed_get_system_status(packet));
         break;
 
-    case AVRCP_SUBEVENT_NOTIFICATION_EVENT_PLAYER_APPLICATION_SETTING_CHANGED:  // 播放器应用设置变化
+    case AVRCP_SUBEVENT_NOTIFICATION_EVENT_PLAYER_APPLICATION_SETTING_CHANGED:
         LOG_I("AVRCP player setting changed, cid=0x%04x, ctype=0x%02x, attr=0x%02x, value=0x%02x",
               avrcp_subevent_notification_event_player_application_setting_changed_get_avrcp_cid(packet),
               avrcp_subevent_notification_event_player_application_setting_changed_get_command_type(packet),
@@ -1219,19 +1212,19 @@ void btstack_event_avrcp_controller_handler(uint8_t packet_type, uint16_t channe
               avrcp_subevent_notification_event_player_application_setting_changed_get_value_id(packet));
         break;
 
-    case AVRCP_SUBEVENT_NOTIFICATION_NOW_PLAYING_CONTENT_CHANGED:  // Now Playing 列表内容变化
+    case AVRCP_SUBEVENT_NOTIFICATION_NOW_PLAYING_CONTENT_CHANGED:
         LOG_I("AVRCP now playing content changed, cid=0x%04x, ctype=0x%02x",
               avrcp_subevent_notification_now_playing_content_changed_get_avrcp_cid(packet),
               avrcp_subevent_notification_now_playing_content_changed_get_command_type(packet));
         break;
 
-    case AVRCP_SUBEVENT_NOTIFICATION_AVAILABLE_PLAYERS_CHANGED:  // 可用播放器列表变化
+    case AVRCP_SUBEVENT_NOTIFICATION_AVAILABLE_PLAYERS_CHANGED:
         LOG_I("AVRCP available players changed, cid=0x%04x, ctype=0x%02x",
               avrcp_subevent_notification_available_players_changed_get_avrcp_cid(packet),
               avrcp_subevent_notification_available_players_changed_get_command_type(packet));
         break;
 
-    case AVRCP_SUBEVENT_NOTIFICATION_ADDRESSED_PLAYER_CHANGED:  // 当前寻址播放器变化
+    case AVRCP_SUBEVENT_NOTIFICATION_ADDRESSED_PLAYER_CHANGED:
         LOG_I("AVRCP addressed player changed, cid=0x%04x, ctype=0x%02x, player_id=%u, uid_counter=%u",
               avrcp_subevent_notification_addressed_player_changed_get_avrcp_cid(packet),
               avrcp_subevent_notification_addressed_player_changed_get_command_type(packet),
@@ -1239,14 +1232,14 @@ void btstack_event_avrcp_controller_handler(uint8_t packet_type, uint16_t channe
               avrcp_subevent_notification_addressed_player_changed_get_uid_counter(packet));
         break;
 
-    case AVRCP_SUBEVENT_NOTIFICATION_EVENT_UIDS_CHANGED:  // 媒体库 UID 变化
+    case AVRCP_SUBEVENT_NOTIFICATION_EVENT_UIDS_CHANGED:
         LOG_I("AVRCP uids changed, cid=0x%04x, ctype=0x%02x, uid_counter=%u",
               avrcp_subevent_notification_event_uids_changed_get_avrcp_cid(packet),
               avrcp_subevent_notification_event_uids_changed_get_command_type(packet),
               avrcp_subevent_notification_event_uids_changed_get_uid_counter(packet));
         break;
 
-    case AVRCP_SUBEVENT_NOTIFICATION_VOLUME_CHANGED:  // TG 收到 SetAbsoluteVolume / 音量变化
+    case AVRCP_SUBEVENT_NOTIFICATION_VOLUME_CHANGED:
     {
         uint16_t cid;
         uint8_t volume;
@@ -1262,7 +1255,7 @@ void btstack_event_avrcp_controller_handler(uint8_t packet_type, uint16_t channe
         break;
     }
 
-    case AVRCP_SUBEVENT_SET_ABSOLUTE_VOLUME_RESPONSE:  // CT 侧设置绝对音量应答(当前主路径不用)
+    case AVRCP_SUBEVENT_SET_ABSOLUTE_VOLUME_RESPONSE:
     {
         uint8_t volume;
 
@@ -1275,7 +1268,7 @@ void btstack_event_avrcp_controller_handler(uint8_t packet_type, uint16_t channe
         break;
     }
 
-    case AVRCP_SUBEVENT_SHUFFLE_AND_REPEAT_MODE:  // 随机/循环模式结果
+    case AVRCP_SUBEVENT_SHUFFLE_AND_REPEAT_MODE:
         LOG_I("AVRCP shuffle/repeat mode, cid=0x%04x, ctype=0x%02x, repeat=%u, shuffle=%u",
               avrcp_subevent_shuffle_and_repeat_mode_get_avrcp_cid(packet),
               avrcp_subevent_shuffle_and_repeat_mode_get_command_type(packet),
@@ -1283,21 +1276,21 @@ void btstack_event_avrcp_controller_handler(uint8_t packet_type, uint16_t channe
               avrcp_subevent_shuffle_and_repeat_mode_get_shuffle_mode(packet));
         break;
 
-    case AVRCP_SUBEVENT_NOW_PLAYING_TRACK_INFO:  // 当前曲目序号
+    case AVRCP_SUBEVENT_NOW_PLAYING_TRACK_INFO:
         LOG_I("AVRCP now playing track=%u, cid=0x%04x, ctype=0x%02x",
               avrcp_subevent_now_playing_track_info_get_track(packet),
               avrcp_subevent_now_playing_track_info_get_avrcp_cid(packet),
               avrcp_subevent_now_playing_track_info_get_command_type(packet));
         break;
 
-    case AVRCP_SUBEVENT_NOW_PLAYING_TOTAL_TRACKS_INFO:  // 曲目总数
+    case AVRCP_SUBEVENT_NOW_PLAYING_TOTAL_TRACKS_INFO:
         LOG_I("AVRCP now playing total_tracks=%u, cid=0x%04x, ctype=0x%02x",
               avrcp_subevent_now_playing_total_tracks_info_get_total_tracks(packet),
               avrcp_subevent_now_playing_total_tracks_info_get_avrcp_cid(packet),
               avrcp_subevent_now_playing_total_tracks_info_get_command_type(packet));
         break;
 
-    case AVRCP_SUBEVENT_NOW_PLAYING_SONG_LENGTH_MS_INFO:  // 歌曲总时长(ms)
+    case AVRCP_SUBEVENT_NOW_PLAYING_SONG_LENGTH_MS_INFO:
         bt_avrcp_ct_set_song_length_ms(avrcp_subevent_now_playing_song_length_ms_info_get_song_length(packet));
         LOG_I("AVRCP now playing song_length=%u ms, cid=0x%04x, ctype=0x%02x",
               (unsigned int)bt_avrcp_ct_song_length_ms,
@@ -1305,7 +1298,7 @@ void btstack_event_avrcp_controller_handler(uint8_t packet_type, uint16_t channe
               avrcp_subevent_now_playing_song_length_ms_info_get_command_type(packet));
         break;
 
-    case AVRCP_SUBEVENT_NOW_PLAYING_TITLE_INFO:  // 歌曲名称
+    case AVRCP_SUBEVENT_NOW_PLAYING_TITLE_INFO:
     {
         const uint8_t *value;
         uint8_t value_len;
@@ -1318,7 +1311,7 @@ void btstack_event_avrcp_controller_handler(uint8_t packet_type, uint16_t channe
         break;
     }
 
-    case AVRCP_SUBEVENT_NOW_PLAYING_ARTIST_INFO:  // 歌手/艺术家
+    case AVRCP_SUBEVENT_NOW_PLAYING_ARTIST_INFO:
     {
         const uint8_t *value;
         uint8_t value_len;
@@ -1331,25 +1324,25 @@ void btstack_event_avrcp_controller_handler(uint8_t packet_type, uint16_t channe
         break;
     }
 
-    case AVRCP_SUBEVENT_NOW_PLAYING_ALBUM_INFO:  // 专辑名称
+    case AVRCP_SUBEVENT_NOW_PLAYING_ALBUM_INFO:
         bt_avrcp_ct_log_text("album",
                              avrcp_subevent_now_playing_album_info_get_value(packet),
                              avrcp_subevent_now_playing_album_info_get_value_len(packet));
         break;
 
-    case AVRCP_SUBEVENT_NOW_PLAYING_GENRE_INFO:  // 曲风/流派
+    case AVRCP_SUBEVENT_NOW_PLAYING_GENRE_INFO:
         bt_avrcp_ct_log_text("genre",
                              avrcp_subevent_now_playing_genre_info_get_value(packet),
                              avrcp_subevent_now_playing_genre_info_get_value_len(packet));
         break;
 
-    case AVRCP_SUBEVENT_NOW_PLAYING_COVER_ART_INFO:  // 封面图信息
+    case AVRCP_SUBEVENT_NOW_PLAYING_COVER_ART_INFO:
         bt_avrcp_ct_log_text("cover_art",
                              avrcp_subevent_now_playing_cover_art_info_get_value(packet),
                              avrcp_subevent_now_playing_cover_art_info_get_value_len(packet));
         break;
 
-    case AVRCP_SUBEVENT_NOW_PLAYING_INFO_DONE:  // Now Playing 信息拉取结束
+    case AVRCP_SUBEVENT_NOW_PLAYING_INFO_DONE:
         LOG_I("AVRCP now playing info done, cid=0x%04x, ctype=0x%02x, status=0x%02x",
               avrcp_subevent_now_playing_info_done_get_avrcp_cid(packet),
               avrcp_subevent_now_playing_info_done_get_command_type(packet),
@@ -1357,7 +1350,7 @@ void btstack_event_avrcp_controller_handler(uint8_t packet_type, uint16_t channe
         pump_now_playing = RT_TRUE;
         break;
 
-    case AVRCP_SUBEVENT_GET_CAPABILITY_EVENT_ID:  // 对端支持的通知 event id
+    case AVRCP_SUBEVENT_GET_CAPABILITY_EVENT_ID:
         LOG_I("AVRCP supported event id, cid=0x%04x, ctype=0x%02x, status=0x%02x, event_id=0x%02x",
               avrcp_subevent_get_capability_event_id_get_avrcp_cid(packet),
               avrcp_subevent_get_capability_event_id_get_command_type(packet),
@@ -1365,14 +1358,14 @@ void btstack_event_avrcp_controller_handler(uint8_t packet_type, uint16_t channe
               avrcp_subevent_get_capability_event_id_get_event_id(packet));
         break;
 
-    case AVRCP_SUBEVENT_GET_CAPABILITY_EVENT_ID_DONE:  // 支持的 event id 列表结束
+    case AVRCP_SUBEVENT_GET_CAPABILITY_EVENT_ID_DONE:
         LOG_I("AVRCP supported event ids done, cid=0x%04x, ctype=0x%02x, status=0x%02x",
               avrcp_subevent_get_capability_event_id_done_get_avrcp_cid(packet),
               avrcp_subevent_get_capability_event_id_done_get_command_type(packet),
               avrcp_subevent_get_capability_event_id_done_get_status(packet));
         break;
 
-    case AVRCP_SUBEVENT_GET_CAPABILITY_COMPANY_ID:  // 对端支持的 company id
+    case AVRCP_SUBEVENT_GET_CAPABILITY_COMPANY_ID:
         LOG_I("AVRCP supported company id, cid=0x%04x, ctype=0x%02x, status=0x%02x, company_id=0x%06x",
               avrcp_subevent_get_capability_company_id_get_avrcp_cid(packet),
               avrcp_subevent_get_capability_company_id_get_command_type(packet),
@@ -1380,14 +1373,14 @@ void btstack_event_avrcp_controller_handler(uint8_t packet_type, uint16_t channe
               (unsigned int)avrcp_subevent_get_capability_company_id_get_company_id(packet));
         break;
 
-    case AVRCP_SUBEVENT_GET_CAPABILITY_COMPANY_ID_DONE:  // company id 列表结束
+    case AVRCP_SUBEVENT_GET_CAPABILITY_COMPANY_ID_DONE:
         LOG_I("AVRCP supported company ids done, cid=0x%04x, ctype=0x%02x, status=0x%02x",
               avrcp_subevent_get_capability_company_id_done_get_avrcp_cid(packet),
               avrcp_subevent_get_capability_company_id_done_get_command_type(packet),
               avrcp_subevent_get_capability_company_id_done_get_status(packet));
         break;
 
-    case AVRCP_SUBEVENT_CUSTOM_COMMAND_RESPONSE:  // 自定义命令应答
+    case AVRCP_SUBEVENT_CUSTOM_COMMAND_RESPONSE:
         LOG_I("AVRCP custom response, cid=0x%04x, ctype=0x%02x, pdu=0x%02x, params_len=%u",
               avrcp_subevent_custom_command_response_get_avrcp_cid(packet),
               avrcp_subevent_custom_command_response_get_command_type(packet),
@@ -1411,15 +1404,12 @@ rt_err_t bt_avrcp_ct_service_init(void)
     bt_avrcp_ct_cid = 0u;
     bt_avrcp_ct_reset_session_state();
 
-    //初始化AVRCP协议栈
     avrcp_init();
     avrcp_target_init();
     avrcp_controller_init();
-    //绑定AVRCP事件回调函数
     avrcp_controller_register_packet_handler(btstack_event_avrcp_controller_handler);
     avrcp_target_register_packet_handler(btstack_event_avrcp_controller_handler);
-    avrcp_register_packet_handler(btstack_event_avrcp_controller_handler);  //AVRCP公共事件回调
-    //注册SDP服务
+    avrcp_register_packet_handler(btstack_event_avrcp_controller_handler);
     if (bt_avrcp_ct_sdp_register_service() != RT_EOK)
     {
         return -RT_ERROR;
@@ -1462,7 +1452,6 @@ rt_bool_t bt_avrcp_ct_is_absolute_volume_active(void)
 
 rt_err_t bt_avrcp_ct_volume_up(void)
 {
-    /* 绝对音量：调本地增益并通知手机；相对音量：Pass-Through volume_up。 */
     if (bt_avrcp_ct_is_absolute_volume_active())
     {
         LOG_D("AVRCP volume up via absolute local gain, step=%u", BT_APP_AVRCP_ABS_VOLUME_STEP);
