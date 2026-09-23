@@ -5,6 +5,10 @@
 #include "bt_host.h"
 #include "btstack_chipset_esp32.h"
 #include "btstack_debug.h"
+#if BT_CFG_ENABLE_HCI_DUMP
+#include "hci_dump.h"
+#include "hci_dump_uart4_rtthread.h"
+#endif
 #include "btstack_run_loop.h"
 #include "btstack_run_loop_embedded.h"
 #include "btstack_tlv.h"
@@ -60,6 +64,14 @@ int btstack_port_init(const btstack_chipset_t * chipset_driver){
 
     // 先把 OS 相关的 run loop/TLV 准备好，再把 UART 和 chipset 驱动交给 Host 层。
     btstack_run_loop_init(btstack_run_loop_embedded_get_instance());
+#if BT_CFG_ENABLE_HCI_DUMP
+    if (hci_dump_uart4_rtthread_open(HCI_DUMP_BTSNOOP) == RT_EOK){
+        hci_dump_init(hci_dump_uart4_rtthread_get_instance());
+    } else {
+        rt_kprintf("btstack_port: UART4 HCI log initialization failed\n");
+    }
+#endif
+
     if (btstack_tlv_littlefs_init() == RT_EOK){
         persistent_tlv = btstack_tlv_littlefs_instance();
         btstack_tlv_set_instance(persistent_tlv, NULL);

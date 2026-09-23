@@ -111,6 +111,7 @@
 // ---------------------------------------------------------------------------
 #define BT_CFG_ENABLE_LOG_ERROR                    1
 #define BT_CFG_ENABLE_LOG_INFO                     1
+#define BT_CFG_ENABLE_HCI_DUMP                     1
 #define BT_CFG_ENABLE_PRINTF_HEXDUMP               0
 
 // ---------------------------------------------------------------------------
