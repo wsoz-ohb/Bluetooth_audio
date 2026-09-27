@@ -11,6 +11,7 @@
 #include "btstack_port.h"
 #include "bt_a2dp_sink_app.h"
 #include "bt_avrcp_ct_app.h"
+#include "bt_hfp_hf_app.h"
 #include "bt_spp_app.h"
 
 #define DBG_TAG "bt_app"
@@ -24,6 +25,10 @@ static int bt_profiles_init(void)
         return -RT_ERROR;
     }
     if(bt_avrcp_ct_service_init() != RT_EOK)
+    {
+        return -RT_ERROR;
+    }
+    if(bt_hfp_hf_service_init() != RT_EOK)
     {
         return -RT_ERROR;
     }

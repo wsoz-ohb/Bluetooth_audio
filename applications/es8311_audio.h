@@ -14,6 +14,7 @@ extern "C" {
 #endif
 
 #define ES8311_AUDIO_DEFAULT_SAMPLE_RATE 44100u
+#define ES8311_AUDIO_CALL_SAMPLE_RATE    16000u
 
 typedef struct
 {
@@ -26,6 +27,7 @@ typedef enum
     ES8311_AUDIO_RUN_MODE_IDLE = 0,
     ES8311_AUDIO_RUN_MODE_PLAYBACK,
     ES8311_AUDIO_RUN_MODE_CAPTURE,
+    ES8311_AUDIO_RUN_MODE_CALL_DUPLEX,
 } es8311_audio_run_mode_t;
 
 typedef rt_uint32_t (*es8311_audio_playback_renderer_t)(rt_int16_t * pcm,

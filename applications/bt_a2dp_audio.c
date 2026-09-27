@@ -19,7 +19,7 @@
 
 #define BT_A2DP_AUDIO_RTP_HEADER_MIN_SIZE     12u
 #define BT_A2DP_AUDIO_SBC_HEADER_SIZE         1u
-#define BT_A2DP_AUDIO_BACKPRESSURE_LEVEL      8192u
+#define BT_A2DP_AUDIO_BACKPRESSURE_LEVEL      4096u
 
 static btstack_sbc_decoder_state_t bt_a2dp_audio_sbc_decoder_state;
 static rt_bool_t bt_a2dp_audio_inited = RT_FALSE;

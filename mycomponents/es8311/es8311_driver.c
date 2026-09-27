@@ -87,9 +87,6 @@
 #define ES8311_DEFAULT_DAC_VOLUME        0xBFu  /* ~0dB, absolute-volume max */
 #define ES8311_POWER_UP_ANALOG           0x01u
 #define ES8311_POWER_UP_ADC_DAC          0x02u
-#define ES8311_PLAYBACK_BCLK_CFG         0x03u
-#define ES8311_PLAYBACK_LRCK_HIGH        0x00u
-#define ES8311_PLAYBACK_LRCK_LOW         0xFFu
 
 typedef struct
 {
@@ -101,7 +98,45 @@ typedef struct
     rt_bool_t record_started;
 } es8311_context_t;
 
+typedef struct
+{
+    rt_uint32_t sample_rate;
+    rt_uint8_t clkmgr2;
+    rt_uint8_t clkmgr3;
+    rt_uint8_t clkmgr4;
+    rt_uint8_t clkmgr5;
+    rt_uint8_t clkmgr6;
+    rt_uint8_t clkmgr7;
+    rt_uint8_t clkmgr8;
+} es8311_clock_profile_t;
+
 static es8311_context_t es8311_ctx;
+
+/* STM32 supplies MCLK at approximately 256 * Fs with 16-bit stereo I2S slots. */
+static const es8311_clock_profile_t es8311_clock_profiles[] =
+{
+    /* Fs       REG02  REG03  REG04  REG05  REG06  REG07  REG08 */
+    {16000u,  0x00u,  0x10u,  0x20u,  0x00u,  0x03u,  0x00u,  0xFFu},
+    {44100u,  0x00u,  0x10u,  0x10u,  0x00u,  0x03u,  0x00u,  0xFFu},
+    {48000u,  0x00u,  0x10u,  0x10u,  0x00u,  0x03u,  0x00u,  0xFFu},
+};
+
+static const es8311_clock_profile_t * es8311_find_clock_profile(rt_uint32_t sample_rate)
+{
+    rt_size_t index;
+
+    for (index = 0u;
+         index < (sizeof(es8311_clock_profiles) / sizeof(es8311_clock_profiles[0]));
+         index++)
+    {
+        if (es8311_clock_profiles[index].sample_rate == sample_rate)
+        {
+            return &es8311_clock_profiles[index];
+        }
+    }
+
+    return RT_NULL;
+}
 
 static void es8311_load_default_config(es8311_config_t * config)
 {
@@ -293,11 +328,7 @@ static rt_err_t es8311_validate_config(const es8311_config_t * config)
         return -RT_EINVAL;
     }
 
-    /*
-     * 当前蓝牙 A2DP 播放链路只实际协商 44.1k / 48k。
-     * 这里故意只放开已经核实过的采样率，避免宣称支持更多但时钟参数不可靠。
-     */
-    if ((config->sample_rate != 44100u) && (config->sample_rate != 48000u))
+    if (es8311_find_clock_profile(config->sample_rate) == RT_NULL)
     {
         return -RT_EINVAL;
     }
@@ -364,65 +395,53 @@ static rt_err_t es8311_probe_chip_id(void)
 
 static rt_err_t es8311_apply_clock_config(const es8311_config_t * config)
 {
+    const es8311_clock_profile_t * profile;
     rt_uint8_t clkmgr1;
-    rt_uint8_t clkmgr2;
-    rt_uint8_t clkmgr3;
-    rt_uint8_t clkmgr4;
-    rt_uint8_t clkmgr5;
-    rt_uint8_t clkmgr6;
-    rt_uint8_t clkmgr7;
-    rt_uint8_t clkmgr8;
 
-    /*
-     * 按当前项目的实际场景固定最小稳定配置：
-     * STM32 I2S2 Master TX + 16bit stereo slot + ES8311 Slave DAC。
-     * 44.1k / 48k 在 256*Fs MCLK 下可共用这组寄存器。
-     */
+    profile = es8311_find_clock_profile(config->sample_rate);
+    if (profile == RT_NULL)
+    {
+        return -RT_EINVAL;
+    }
+
     clkmgr1 = config->use_mclk ? ES8311_CLKMGR1_PLAYBACK_MCLK : ES8311_CLKMGR1_PLAYBACK_SCLK;
-    clkmgr2 = 0x00u;
-    clkmgr3 = 0x10u;
-    clkmgr4 = 0x10u;
-    clkmgr5 = 0x00u;
-    clkmgr6 = ES8311_PLAYBACK_BCLK_CFG;
-    clkmgr7 = ES8311_PLAYBACK_LRCK_HIGH;
-    clkmgr8 = ES8311_PLAYBACK_LRCK_LOW;
 
     if (es8311_write_register(ES8311_CLKMGR1_REG, clkmgr1) != RT_EOK)
     {
         return -RT_ERROR;
     }
 
-    if (es8311_write_register(ES8311_CLKMGR2_REG, clkmgr2) != RT_EOK)
+    if (es8311_write_register(ES8311_CLKMGR2_REG, profile->clkmgr2) != RT_EOK)
     {
         return -RT_ERROR;
     }
 
-    if (es8311_write_register(ES8311_CLKMGR3_REG, clkmgr3) != RT_EOK)
+    if (es8311_write_register(ES8311_CLKMGR3_REG, profile->clkmgr3) != RT_EOK)
     {
         return -RT_ERROR;
     }
 
-    if (es8311_write_register(ES8311_CLKMGR4_REG, clkmgr4) != RT_EOK)
+    if (es8311_write_register(ES8311_CLKMGR4_REG, profile->clkmgr4) != RT_EOK)
     {
         return -RT_ERROR;
     }
 
-    if (es8311_write_register(ES8311_CLKMGR5_REG, clkmgr5) != RT_EOK)
+    if (es8311_write_register(ES8311_CLKMGR5_REG, profile->clkmgr5) != RT_EOK)
     {
         return -RT_ERROR;
     }
 
-    if (es8311_write_register(ES8311_CLKMGR6_REG, clkmgr6) != RT_EOK)
+    if (es8311_write_register(ES8311_CLKMGR6_REG, profile->clkmgr6) != RT_EOK)
     {
         return -RT_ERROR;
     }
 
-    if (es8311_write_register(ES8311_CLKMGR7_REG, clkmgr7) != RT_EOK)
+    if (es8311_write_register(ES8311_CLKMGR7_REG, profile->clkmgr7) != RT_EOK)
     {
         return -RT_ERROR;
     }
 
-    if (es8311_write_register(ES8311_CLKMGR8_REG, clkmgr8) != RT_EOK)
+    if (es8311_write_register(ES8311_CLKMGR8_REG, profile->clkmgr8) != RT_EOK)
     {
         return -RT_ERROR;
     }

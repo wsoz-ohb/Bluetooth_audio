@@ -370,6 +370,66 @@ static rt_err_t es8311_audio_start_duplex_dma(void)
     return RT_EOK;
 }
 
+static rt_err_t es8311_audio_start_call_duplex(void)
+{
+    rt_base_t level;
+
+    if (!es8311_audio_ctx.inited)
+    {
+        return -RT_ERROR;
+    }
+
+    if ((es8311_audio_ctx.dma_mode != ES8311_AUDIO_DMA_MODE_STOPPED) ||
+        es8311_audio_ctx.playback_running ||
+        es8311_audio_ctx.capture_running)
+    {
+        return -RT_EBUSY;
+    }
+
+    level = rt_hw_interrupt_disable();
+    es8311_audio_reset_playback_state_locked();
+    es8311_audio_reset_capture_ring_locked();
+    es8311_audio_ctx.playback_ramp_frame = 0u;
+    rt_hw_interrupt_enable(level);
+
+    if (es8311_start_playback() != RT_EOK)
+    {
+        LOG_E("call duplex playback path start failed");
+        return -RT_ERROR;
+    }
+
+    if (es8311_start_record() != RT_EOK)
+    {
+        LOG_E("call duplex capture path start failed");
+        (void) es8311_stop_playback();
+        return -RT_ERROR;
+    }
+
+    level = rt_hw_interrupt_disable();
+    es8311_audio_ctx.playback_running = RT_TRUE;
+    es8311_audio_ctx.capture_running = RT_TRUE;
+    es8311_audio_ctx.playback_start_pending = RT_FALSE;
+    es8311_audio_ctx.playback_underflow_notice_printed = RT_FALSE;
+    rt_hw_interrupt_enable(level);
+
+    if (es8311_audio_start_duplex_dma() != RT_EOK)
+    {
+        level = rt_hw_interrupt_disable();
+        es8311_audio_ctx.playback_running = RT_FALSE;
+        es8311_audio_ctx.capture_running = RT_FALSE;
+        es8311_audio_reset_playback_state_locked();
+        es8311_audio_reset_capture_ring_locked();
+        rt_hw_interrupt_enable(level);
+        (void) es8311_stop_record();
+        (void) es8311_stop_playback();
+        return -RT_ERROR;
+    }
+
+    LOG_I("es8311 call duplex started, sample_rate=%u",
+          es8311_audio_ctx.sample_rate);
+    return RT_EOK;
+}
+
 static void es8311_audio_stop_dma(void)
 {
     if (es8311_audio_ctx.dma_mode == ES8311_AUDIO_DMA_MODE_STOPPED)
@@ -451,17 +511,7 @@ static rt_err_t es8311_audio_i2s_reconfigure(rt_uint32_t sample_rate)
         return -RT_ERROR;
     }
 
-    if (es8311_audio_ctx.playback_running && !es8311_audio_ctx.playback_start_pending)
-    {
-        if (es8311_audio_start_playback_dma() != RT_EOK)
-        {
-            es8311_audio_ctx.i2s_inited = was_i2s_inited;
-            es8311_audio_ctx.sample_rate = old_sample_rate;
-            es8311_audio_ctx.dma_mode = was_dma_mode;
-            return -RT_ERROR;
-        }
-    }
-    else if (es8311_audio_ctx.capture_running)
+    if (es8311_audio_ctx.capture_running)
     {
         if (es8311_audio_start_duplex_dma() != RT_EOK)
         {
@@ -471,7 +521,16 @@ static rt_err_t es8311_audio_i2s_reconfigure(rt_uint32_t sample_rate)
             return -RT_ERROR;
         }
     }
-
+    else if (es8311_audio_ctx.playback_running && !es8311_audio_ctx.playback_start_pending)
+    {
+        if (es8311_audio_start_playback_dma() != RT_EOK)
+        {
+            es8311_audio_ctx.i2s_inited = was_i2s_inited;
+            es8311_audio_ctx.sample_rate = old_sample_rate;
+            es8311_audio_ctx.dma_mode = was_dma_mode;
+            return -RT_ERROR;
+        }
+    }
     return RT_EOK;
 }
 
@@ -808,6 +867,8 @@ const char * es8311_audio_run_mode_name(es8311_audio_run_mode_t mode)
         return "playback";
     case ES8311_AUDIO_RUN_MODE_CAPTURE:
         return "capture";
+    case ES8311_AUDIO_RUN_MODE_CALL_DUPLEX:
+        return "call_duplex";
     default:
         return "unknown";
     }
@@ -819,7 +880,11 @@ es8311_audio_run_mode_t es8311_audio_get_run_mode(void)
     es8311_audio_run_mode_t mode;
 
     level = rt_hw_interrupt_disable();
-    if (es8311_audio_ctx.capture_running)
+    if (es8311_audio_ctx.playback_running && es8311_audio_ctx.capture_running)
+    {
+        mode = ES8311_AUDIO_RUN_MODE_CALL_DUPLEX;
+    }
+    else if (es8311_audio_ctx.capture_running)
     {
         mode = ES8311_AUDIO_RUN_MODE_CAPTURE;
     }
@@ -855,14 +920,19 @@ rt_err_t es8311_audio_set_run_mode(es8311_audio_run_mode_t mode)
         return RT_EOK;
 
     case ES8311_AUDIO_RUN_MODE_PLAYBACK:
-        if (es8311_audio_is_playback_running())
+        if (es8311_audio_get_run_mode() == ES8311_AUDIO_RUN_MODE_PLAYBACK)
         {
             return RT_EOK;
         }
 
-        // 当前实现里 playback/capture 是互斥的，切模式时直接清空对侧缓存。
+        es8311_audio_stop_playback();
         es8311_audio_stop_capture();
         es8311_audio_flush_capture();
+        if (es8311_audio_i2s_reconfigure(ES8311_AUDIO_DEFAULT_SAMPLE_RATE) != RT_EOK)
+        {
+            LOG_E("switch playback sample rate failed: %u", ES8311_AUDIO_DEFAULT_SAMPLE_RATE);
+            return -RT_ERROR;
+        }
         err = es8311_audio_start_playback();
         if (err == RT_EOK)
         {
@@ -871,12 +941,13 @@ rt_err_t es8311_audio_set_run_mode(es8311_audio_run_mode_t mode)
         return err;
 
     case ES8311_AUDIO_RUN_MODE_CAPTURE:
-        if (es8311_audio_is_capture_running())
+        if (es8311_audio_get_run_mode() == ES8311_AUDIO_RUN_MODE_CAPTURE)
         {
             return RT_EOK;
         }
 
         es8311_audio_stop_playback();
+        es8311_audio_stop_capture();
         // capture 目前固定回到默认采样率，先保证链路简单稳定。
         if (es8311_audio_i2s_reconfigure(ES8311_AUDIO_DEFAULT_SAMPLE_RATE) != RT_EOK)
         {
@@ -887,6 +958,29 @@ rt_err_t es8311_audio_set_run_mode(es8311_audio_run_mode_t mode)
         if (err == RT_EOK)
         {
             LOG_I("manual audio mode switched to capture");
+        }
+        return err;
+
+    case ES8311_AUDIO_RUN_MODE_CALL_DUPLEX:
+        if ((es8311_audio_get_run_mode() == ES8311_AUDIO_RUN_MODE_CALL_DUPLEX) &&
+            (es8311_audio_get_sample_rate() == ES8311_AUDIO_CALL_SAMPLE_RATE))
+        {
+            return RT_EOK;
+        }
+
+        es8311_audio_stop_playback();
+        es8311_audio_stop_capture();
+        es8311_audio_flush_capture();
+        if (es8311_audio_i2s_reconfigure(ES8311_AUDIO_CALL_SAMPLE_RATE) != RT_EOK)
+        {
+            LOG_E("switch call duplex sample rate failed: %u",
+                  ES8311_AUDIO_CALL_SAMPLE_RATE);
+            return -RT_ERROR;
+        }
+        err = es8311_audio_start_call_duplex();
+        if (err == RT_EOK)
+        {
+            LOG_I("manual audio mode switched to call duplex");
         }
         return err;
 

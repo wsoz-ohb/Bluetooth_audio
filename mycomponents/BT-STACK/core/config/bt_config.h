@@ -44,9 +44,9 @@
 // ---------------------------------------------------------------------------
 // Classic 可选能力
 // ---------------------------------------------------------------------------
-#define BT_CFG_ENABLE_HFP_WBS                      0
+#define BT_CFG_ENABLE_HFP_WBS                      1
 #define BT_CFG_ENABLE_L2CAP_ERTM                   0
-#define BT_CFG_ENABLE_SCO_OVER_HCI                 0
+#define BT_CFG_ENABLE_SCO_OVER_HCI                 1
 #define BT_CFG_MAX_NR_AVRCP_CONNECTIONS            2
 #define BT_CFG_MAX_NR_AVRCP_BROWSING_CONNECTIONS   0
 // ---------------------------------------------------------------------------
@@ -124,8 +124,9 @@
 #define BT_CFG_MAX_NR_L2CAP_SERVICES               4
 
 #define BT_CFG_MAX_NR_RFCOMM_MULTIPLEXERS          1
-#define BT_CFG_MAX_NR_RFCOMM_SERVICES              1
-#define BT_CFG_MAX_NR_RFCOMM_CHANNELS              1
+#define BT_CFG_MAX_NR_RFCOMM_SERVICES              2
+#define BT_CFG_MAX_NR_RFCOMM_CHANNELS              2
+#define BT_CFG_MAX_NR_HFP_CONNECTIONS              1
 #define BT_CFG_MAX_NR_SERVICE_RECORD_ITEMS         8
 #define BT_CFG_MAX_NR_AVDTP_STREAM_ENDPOINTS      1
 #define BT_CFG_MAX_NR_AVDTP_CONNECTIONS           1
