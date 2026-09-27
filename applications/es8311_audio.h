@@ -13,8 +13,10 @@
 extern "C" {
 #endif
 
-#define ES8311_AUDIO_DEFAULT_SAMPLE_RATE 44100u
-#define ES8311_AUDIO_CALL_SAMPLE_RATE    16000u
+#define ES8311_AUDIO_DEFAULT_SAMPLE_RATE       44100u
+#define ES8311_AUDIO_CVSD_SAMPLE_RATE           8000u
+#define ES8311_AUDIO_MSBC_SAMPLE_RATE          16000u
+#define ES8311_AUDIO_CALL_SAMPLE_RATE          ES8311_AUDIO_MSBC_SAMPLE_RATE
 
 typedef struct
 {
@@ -37,6 +39,7 @@ typedef rt_uint32_t (*es8311_audio_playback_renderer_t)(rt_int16_t * pcm,
 rt_err_t es8311_audio_init(void);
 rt_bool_t es8311_audio_is_inited(void);
 rt_err_t es8311_audio_configure(rt_uint32_t sample_rate, rt_uint8_t playback_channels);
+rt_err_t es8311_audio_set_call_sample_rate(rt_uint32_t sample_rate);
 rt_err_t es8311_audio_set_run_mode(es8311_audio_run_mode_t mode);
 es8311_audio_run_mode_t es8311_audio_get_run_mode(void);
 const char * es8311_audio_run_mode_name(es8311_audio_run_mode_t mode);

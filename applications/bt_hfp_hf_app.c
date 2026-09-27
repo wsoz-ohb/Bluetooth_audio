@@ -26,6 +26,8 @@
 #define BT_HFP_HF_SERVICE_NAME         "WSOZ Hands-Free"
 #define SCO_PLAYBACK_RINGBUFFER_SIZE_BYTES  2048u
 
+static  uint8_t negotiated_codec;
+
 static const uint8_t bt_hfp_hf_codecs[] = {
     HFP_CODEC_CVSD,
     HFP_CODEC_MSBC,
@@ -151,7 +153,6 @@ static void bt_hfp_hf_packet_handler(uint8_t packet_type,
     case HFP_SUBEVENT_AUDIO_CONNECTION_ESTABLISHED:     //SCO
     {
         uint8_t status;
-        uint8_t negotiated_codec;
         const char *codec_name;
         uint32_t sample_rate;
         rt_err_t err;
@@ -186,12 +187,6 @@ static void bt_hfp_hf_packet_handler(uint8_t packet_type,
             break;
         }
 
-        if (negotiated_codec != HFP_CODEC_MSBC)
-        {
-            LOG_W("HFP SCO codec is not mSBC, keep current audio route");
-            break;
-        }
-
         err = es8311_audio_set_run_mode(ES8311_AUDIO_RUN_MODE_IDLE);
         if (err != RT_EOK)
         {
@@ -200,10 +195,14 @@ static void bt_hfp_hf_packet_handler(uint8_t packet_type,
         }
 
         rt_ringbuffer_reset(&sco_playback_ringbuffer);
-        sco_sbc_decoder->configure(&sco_sbc_decoder_context,
-                                   SBC_MODE_mSBC,
-                                   handle_sco_pcm,
-                                   RT_NULL);
+        if(negotiated_codec == HFP_CODEC_MSBC)
+        {
+            sco_sbc_decoder->configure(&sco_sbc_decoder_context,
+                                    SBC_MODE_mSBC,
+                                    handle_sco_pcm,
+                                    RT_NULL);
+        }
+
 
         err = es8311_audio_set_playback_renderer(bt_hfp_hf_render_stereo, RT_NULL);
         if (err != RT_EOK)
@@ -211,8 +210,17 @@ static void bt_hfp_hf_packet_handler(uint8_t packet_type,
             LOG_E("set HFP playback renderer failed: %d", err);
             break;
         }
+        
+        if(negotiated_codec == HFP_CODEC_CVSD)
+        {
+            es8311_audio_set_call_sample_rate(ES8311_AUDIO_CVSD_SAMPLE_RATE);
+            err = es8311_audio_set_run_mode(ES8311_AUDIO_RUN_MODE_CALL_DUPLEX);            
+        }else if(negotiated_codec == HFP_CODEC_MSBC)
+        {
+            es8311_audio_set_call_sample_rate(ES8311_AUDIO_MSBC_SAMPLE_RATE);
+            err = es8311_audio_set_run_mode(ES8311_AUDIO_RUN_MODE_CALL_DUPLEX);
+        }
 
-        err = es8311_audio_set_run_mode(ES8311_AUDIO_RUN_MODE_CALL_DUPLEX);
         if (err != RT_EOK)
         {
             LOG_E("start HFP call duplex failed: %d", err);
@@ -281,21 +289,41 @@ static void bt_hfp_hf_sco_packet_handler(uint8_t packet_type,
         uint8_t payload_length;
         uint8_t *payload;
 
-        handle_and_flags = little_endian_read_16(packet, 0);
-        sco_handle = READ_SCO_CONNECTION_HANDLE(packet);
-        packet_status = (handle_and_flags >> 12) & 0x03u;
-        payload_length = packet[2];
-        payload = packet + HCI_SCO_HEADER_SIZE; //skip header
-
-        if (bt_hfp_hf_sco_handle == sco_handle)
+        if(negotiated_codec == HFP_CODEC_MSBC)
         {
-            //put into msbc_decoder
-            sco_sbc_decoder->decode_signed_16(&sco_sbc_decoder_context,
-                                              packet_status,
-                                              payload,
-                                              payload_length);
+            handle_and_flags = little_endian_read_16(packet, 0);
+            sco_handle = READ_SCO_CONNECTION_HANDLE(packet);
+            packet_status = (handle_and_flags >> 12) & 0x03u;
+            payload_length = packet[2];
+            payload = packet + HCI_SCO_HEADER_SIZE; //skip header
 
+            if (bt_hfp_hf_sco_handle == sco_handle)
+            {
+                //put into msbc_decoder
+                sco_sbc_decoder->decode_signed_16(&sco_sbc_decoder_context,
+                                                packet_status,
+                                                payload,
+                                                payload_length);
+
+            }
+        }else if(negotiated_codec == HFP_CODEC_CVSD)
+        {
+            handle_and_flags = little_endian_read_16(packet, 0);
+            sco_handle = READ_SCO_CONNECTION_HANDLE(packet);
+            packet_status = (handle_and_flags >> 12) & 0x03u;
+            payload_length = packet[2];
+            payload = packet + HCI_SCO_HEADER_SIZE; //skip header
+
+            if (bt_hfp_hf_sco_handle == sco_handle)
+            {
+                //put into ringbuffer
+                (void)rt_ringbuffer_put(&sco_playback_ringbuffer,
+                                        payload,
+                                        payload_length);
+            }
         }
+
+
 
 
         break;

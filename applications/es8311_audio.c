@@ -57,6 +57,7 @@ typedef struct
     rt_bool_t capture_overflow_notice_printed;
     rt_uint32_t capture_drop_frames;
     rt_uint32_t sample_rate;
+    rt_uint32_t call_sample_rate;
     rt_uint8_t volume_0_127;
     rt_uint8_t capture_slot;
     rt_bool_t capture_slot_locked;
@@ -767,6 +768,7 @@ rt_err_t es8311_audio_init(void)
     }
 
     es8311_audio_ctx.sample_rate = ES8311_AUDIO_DEFAULT_SAMPLE_RATE;
+    es8311_audio_ctx.call_sample_rate = ES8311_AUDIO_CALL_SAMPLE_RATE;
     es8311_audio_ctx.volume_0_127 = ES8311_AUDIO_DEFAULT_VOLUME;
     if (es8311_set_dac_volume(es8311_audio_map_volume_to_dac_reg(es8311_audio_ctx.volume_0_127)) != RT_EOK)
     {
@@ -855,6 +857,23 @@ rt_err_t es8311_audio_configure(rt_uint32_t sample_rate, rt_uint8_t playback_cha
     rt_hw_interrupt_enable(level);
 
     return es8311_audio_i2s_reconfigure(sample_rate);
+}
+
+rt_err_t es8311_audio_set_call_sample_rate(rt_uint32_t sample_rate)
+{
+    if (!es8311_audio_ctx.inited)
+    {
+        return -RT_ERROR;
+    }
+
+    if ((sample_rate != ES8311_AUDIO_CVSD_SAMPLE_RATE) &&
+        (sample_rate != ES8311_AUDIO_MSBC_SAMPLE_RATE))
+    {
+        return -RT_EINVAL;
+    }
+
+    es8311_audio_ctx.call_sample_rate = sample_rate;
+    return RT_EOK;
 }
 
 const char * es8311_audio_run_mode_name(es8311_audio_run_mode_t mode)
@@ -963,7 +982,7 @@ rt_err_t es8311_audio_set_run_mode(es8311_audio_run_mode_t mode)
 
     case ES8311_AUDIO_RUN_MODE_CALL_DUPLEX:
         if ((es8311_audio_get_run_mode() == ES8311_AUDIO_RUN_MODE_CALL_DUPLEX) &&
-            (es8311_audio_get_sample_rate() == ES8311_AUDIO_CALL_SAMPLE_RATE))
+            (es8311_audio_get_sample_rate() == es8311_audio_ctx.call_sample_rate))
         {
             return RT_EOK;
         }
@@ -971,10 +990,10 @@ rt_err_t es8311_audio_set_run_mode(es8311_audio_run_mode_t mode)
         es8311_audio_stop_playback();
         es8311_audio_stop_capture();
         es8311_audio_flush_capture();
-        if (es8311_audio_i2s_reconfigure(ES8311_AUDIO_CALL_SAMPLE_RATE) != RT_EOK)
+        if (es8311_audio_i2s_reconfigure(es8311_audio_ctx.call_sample_rate) != RT_EOK)
         {
             LOG_E("switch call duplex sample rate failed: %u",
-                  ES8311_AUDIO_CALL_SAMPLE_RATE);
+                  es8311_audio_ctx.call_sample_rate);
             return -RT_ERROR;
         }
         err = es8311_audio_start_call_duplex();
