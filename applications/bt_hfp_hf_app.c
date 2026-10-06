@@ -462,8 +462,8 @@ static void bt_hfp_hf_sco_packet_handler(uint8_t packet_type,
                                     payload_length);
         }
 
-        /* One received SCO packet grants one uplink packet, including a
-         * header-only packet. The stack may emit CAN_SEND_NOW before return. */
+        /* One received SCO packet schedules one uplink request. The actual
+         * packet is still sent only from HCI_EVENT_SCO_CAN_SEND_NOW. */
         if (payload_length > 0u)
         {
             bt_hfp_hf_sco_tx_payload_len = payload_length;
@@ -487,7 +487,10 @@ static void bt_hfp_hf_sco_packet_handler(uint8_t packet_type,
             (hci_event_packet_get_type(packet) == HCI_EVENT_SCO_CAN_SEND_NOW) &&
             (hci_event_sco_can_send_now_get_handle(packet) == bt_hfp_hf_sco_handle))
         {
-            bt_hfp_hf_send_uplink_packet();
+            if (hci_can_send_sco_packet_now_for_con_handle(bt_hfp_hf_sco_handle))
+            {
+                bt_hfp_hf_send_uplink_packet();
+            }
         }
         break;
 

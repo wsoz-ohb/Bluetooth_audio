@@ -827,7 +827,10 @@ bool hci_can_send_sco_packet_now_for_con_handle(hci_con_handle_t con_handle) {
     hci_connection_t * connection = hci_connection_for_handle(con_handle);
     if (connection == NULL)  return false;
 
-    return connection->sco_tx_ready > 0;
+    /* Keep the query consistent with hci_request_sco_can_send_now_event_for_con_handle().
+     * Explicit synchronous flow control uses controller buffer credits, while
+     * implicit flow control uses the per-connection RX-paced credits. */
+    return hci_controller_can_send_sco_for_connection(connection);
 }
 
 void hci_request_sco_can_send_now_event_for_con_handle(hci_con_handle_t con_handle) {
