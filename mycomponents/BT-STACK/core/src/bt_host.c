@@ -60,6 +60,13 @@ int bt_host_stack_init(const btstack_uart_block_t *uart_driver, const btstack_ch
     btstack_memory_init();
     hci_init(hci_transport_h4_instance(uart_driver), &bt_host_h4_uart_config);
 
+#if BT_CFG_ENABLE_CLASSIC
+    /* Disable BR/EDR Secure Connections for SCO interoperability with the
+     * current controller. This must be set after every hci_init() and before
+     * powering the controller on. BLE Secure Connections is unaffected. */
+    gap_secure_connections_enable(false);
+#endif
+
     if (chipset_driver != NULL){
         hci_set_chipset(chipset_driver);
     }
