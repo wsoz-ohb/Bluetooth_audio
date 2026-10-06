@@ -47,6 +47,14 @@
 #define BT_CFG_ENABLE_HFP_WBS                      1
 #define BT_CFG_ENABLE_L2CAP_ERTM                   0
 #define BT_CFG_ENABLE_SCO_OVER_HCI                 1
+// Controller-to-Host HCI flow control. The Host reports these lengths and
+// packet counts with Host Buffer Size. Read Buffer Size limits the opposite
+// direction: packets the Host sends to the Controller.
+#define BT_CFG_ENABLE_HCI_CONTROLLER_TO_HOST_FLOW_CONTROL  0
+#define BT_CFG_HCI_HOST_ACL_PACKET_LEN                     1691
+#define BT_CFG_HCI_HOST_ACL_PACKET_NUM                     6
+#define BT_CFG_HCI_HOST_SCO_PACKET_LEN                     60
+#define BT_CFG_HCI_HOST_SCO_PACKET_NUM                     10
 #define BT_CFG_MAX_NR_AVRCP_CONNECTIONS            2
 #define BT_CFG_MAX_NR_AVRCP_BROWSING_CONNECTIONS   0
 // ---------------------------------------------------------------------------

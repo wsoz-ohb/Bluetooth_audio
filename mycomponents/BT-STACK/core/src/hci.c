@@ -790,10 +790,23 @@ bool hci_can_send_acl_classic_packet_now(void){
     return hci_can_send_prepared_acl_packet_for_address_type(BD_ADDR_TYPE_ACL);
 }
 
+/* ESP32 UART controllers often report zero SCO buffers and still accept SCO
+ * over HCI. Pace those links from received packets instead of completed-packet
+ * credits, which never arrive. */
+static bool hci_sco_implicit_flow_control(void) {
+    if (hci_have_usb_transport()) {
+        return false;
+    }
+    if (hci_stack->synchronous_flow_control_enabled && (hci_stack->sco_packets_total_num > 0)) {
+        return false;
+    }
+    return true;
+}
+
 static bool hci_controller_can_send_sco_for_connection(hci_connection_t * connection) {
     if (hci_have_usb_transport()) {
         return hci_stack->sco_can_send_now;
-    } else if (hci_stack->synchronous_flow_control_enabled) {
+    } else if (!hci_sco_implicit_flow_control()) {
         return hci_number_free_sco_slots() > 0;
     } else {
         return connection->sco_tx_ready;
@@ -1080,7 +1093,7 @@ uint8_t hci_send_sco_packet_buffer(int size){
             // token used
             hci_stack->sco_can_send_now = false;
         } else {
-            if (hci_stack->synchronous_flow_control_enabled){
+            if (!hci_sco_implicit_flow_control()){
                 connection->num_packets_sent++;
             } else {
                 connection->sco_tx_ready--;
@@ -4965,13 +4978,20 @@ static uint16_t hci_sco_packet_length_for_payload_length_and_voice_setting(uint1
     // apply multiplier
     uint16_t ideal_payload_length = payload_length * multiplier;
 
+    // Read Buffer Size may report SCO length 0 on UART controllers that still
+    // carry SCO over HCI. Do not collapse the packet to an empty payload.
+    uint16_t sco_packet_limit = hci_stack->sco_data_packet_length;
+    if (sco_packet_limit == 0){
+        sco_packet_limit = 255;
+    }
+
     // assert that our SCO packets fit into the Controller buffers
     uint16_t sco_payload_length = 0;
     int divisor = 1;
     do {
         sco_payload_length = ideal_payload_length / divisor;
         divisor++;
-    } while (sco_payload_length > hci_stack->sco_data_packet_length);
+    } while ((sco_payload_length > sco_packet_limit) && (divisor < 16));
 
     // Add 3 bytes SCO header
     uint16_t sco_packet_length = sco_payload_length + 3;
@@ -4998,19 +5018,30 @@ static void sco_handler(uint8_t * packet, uint16_t size){
         // Nothing to do
     } else {
         // log_debug("sco flow %u, handle 0x%04x, packets sent %u, bytes send %u", hci_stack->synchronous_flow_control_enabled, (int) con_handle, conn->num_packets_sent, conn->num_sco_bytes_sent);
-        if ((hci_stack->synchronous_flow_control_enabled == 0) && (conn->sco_payload_length != 0)) {
+        if (hci_sco_implicit_flow_control()) {
             // get multiplier 2 for CVSD (16-bit samples) and 1 for mSBC (8-bit datq)
             int multiplier = hci_sco_get_multiplier_for_voice_setting(conn->sco_voice_setting);
+            uint8_t slot_limit = hci_stack->sco_packets_total_num;
+            uint8_t max_sco_packets;
 
-            // ignore received SCO packets for the first 10 ms, then allow for max two HCI_SCO_2EV3_SIZE packets
-            uint8_t max_sco_packets = (uint8_t) btstack_min(2 * multiplier * HCI_SCO_2EV3_SIZE / conn->sco_payload_length, hci_stack->sco_packets_total_num);
-            if (conn->sco_tx_active == 0){
-                if (btstack_time_delta(btstack_run_loop_get_time_ms(), conn->sco_established_ms) > 10){
-                    conn->sco_tx_active = 1;
-                    conn->sco_tx_ready = max_sco_packets;
-                    log_info("Start SCO sending, %u packets", conn->sco_tx_ready);
-                    hci_notify_if_sco_can_send_now();
+            if (slot_limit == 0){
+                slot_limit = 1;
+            }
+
+            // One received SCO packet allows one outgoing packet.
+            if (conn->sco_payload_length == 0){
+                max_sco_packets = 1;
+            } else {
+                max_sco_packets = (uint8_t) btstack_min(2 * multiplier * HCI_SCO_2EV3_SIZE / conn->sco_payload_length, slot_limit);
+                if (max_sco_packets == 0){
+                    max_sco_packets = 1;
                 }
+            }
+            if (conn->sco_tx_active == 0){
+                conn->sco_tx_active = 1;
+                conn->sco_tx_ready = max_sco_packets;
+                log_info("Start SCO sending, %u packets", conn->sco_tx_ready);
+                hci_notify_if_sco_can_send_now();
             } else {
                 // calculate how many packets can be sent for one received one
                 // - remove sco header
@@ -5018,7 +5049,13 @@ static void sco_handler(uint8_t * packet, uint16_t size){
                 // - avoid overrun
                 int received_payload_len = size - 3;
                 int outgoing_payload_len = hci_sco_packet_length_for_payload_length_and_voice_setting(conn->sco_payload_length, conn->sco_voice_setting) - 3;
-                int new_credits = received_payload_len / outgoing_payload_len;
+                int new_credits = 1;
+                if (outgoing_payload_len > 0){
+                    new_credits = received_payload_len / outgoing_payload_len;
+                }
+                if (new_credits < 1){
+                    new_credits = 1;
+                }
                 if ((conn->sco_tx_ready + new_credits)< max_sco_packets){
                     conn->sco_tx_ready += new_credits;
                 } else {

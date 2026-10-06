@@ -8,6 +8,7 @@
 #include "hci.h"
 #include "classic/hfp.h"
 #include "classic/hfp_hf.h"
+#include "classic/hfp_msbc.h"
 #include "classic/rfcomm.h"
 #include "classic/sdp_server.h"
 #include "classic/btstack_sbc_bluedroid.h"
@@ -25,6 +26,7 @@
 #define BT_HFP_HF_SUPPORTED_FEATURES   (1u << HFP_HFSF_CODEC_NEGOTIATION)   //codec negotiation
 #define BT_HFP_HF_SERVICE_NAME         "WSOZ Hands-Free"
 #define SCO_PLAYBACK_RINGBUFFER_SIZE_BYTES  2048u
+#define BT_HFP_HF_SCO_TX_PCM_SAMPLES        128u
 
 static  uint8_t negotiated_codec;
 
@@ -43,6 +45,11 @@ static rt_uint8_t sco_playback_buffer[SCO_PLAYBACK_RINGBUFFER_SIZE_BYTES];
 static btstack_sbc_decoder_bluedroid_t sco_sbc_decoder_context
     __attribute__((section(".ccmbss.hfp_sbc_decoder")));
 static const btstack_sbc_decoder_t * sco_sbc_decoder;
+static uint8_t bt_hfp_hf_sco_tx_payload_len;
+static rt_bool_t bt_hfp_hf_uplink_logged;
+static rt_bool_t bt_hfp_hf_rx_logged;
+static int16_t bt_hfp_hf_sco_tx_pcm[BT_HFP_HF_SCO_TX_PCM_SAMPLES];
+static uint8_t bt_hfp_hf_sco_tx_payload[255];
 
 static void handle_sco_pcm(int16_t * data, int num_samples, int num_channels, int sample_rate, void * context)
 {
@@ -99,6 +106,133 @@ static rt_uint32_t bt_hfp_hf_render_stereo(rt_int16_t * pcm,
     return read_frames;
 }
 
+static void bt_hfp_hf_reset_uplink(void)
+{
+    bt_hfp_hf_sco_tx_payload_len = 0u;
+    bt_hfp_hf_uplink_logged = RT_FALSE;
+    bt_hfp_hf_rx_logged = RT_FALSE;
+    if (negotiated_codec == HFP_CODEC_MSBC)
+    {
+        hfp_msbc_deinit();
+    }
+}
+
+static void bt_hfp_hf_read_mic_pcm(int16_t * pcm, uint16_t samples)
+{
+    uint32_t level;
+    uint32_t keep;
+    int16_t discard[32];
+    uint32_t got;
+
+    if ((pcm == RT_NULL) || (samples == 0u))
+    {
+        return;
+    }
+
+    /* Drop stale capture so the packet just sent tracks the latest mic audio. */
+    keep = (uint32_t)samples * 2u;
+    level = es8311_audio_get_capture_level_frames();
+    while (level > keep)
+    {
+        uint32_t drop;
+
+        drop = level - keep;
+        if (drop > (uint32_t)(sizeof(discard) / sizeof(discard[0])))
+        {
+            drop = (uint32_t)(sizeof(discard) / sizeof(discard[0]));
+        }
+
+        got = es8311_audio_read_capture(discard, drop);
+        if (got == 0u)
+        {
+            break;
+        }
+        level -= got;
+    }
+
+    got = es8311_audio_read_capture(pcm, samples);
+    if (got < samples)
+    {
+        memset(&pcm[got], 0, ((size_t)samples - got) * sizeof(*pcm));
+    }
+}
+
+static void bt_hfp_hf_send_uplink_packet(void)
+{
+    uint8_t payload_len;
+    uint8_t * sco_packet;
+    hci_con_handle_t sco_handle;
+
+    sco_handle = bt_hfp_hf_sco_handle;
+    payload_len = bt_hfp_hf_sco_tx_payload_len;
+    if ((sco_handle == HCI_CON_HANDLE_INVALID) || (payload_len == 0u))
+    {
+        return;
+    }
+
+    memset(bt_hfp_hf_sco_tx_payload, 0, payload_len);
+    if (negotiated_codec == HFP_CODEC_MSBC)
+    {
+        uint8_t attempts;
+
+        attempts = 0u;
+        while ((hfp_msbc_num_bytes_in_stream() < (int)payload_len) &&
+               (hfp_msbc_can_encode_audio_frame_now() != 0) &&
+               (attempts < 2u))
+        {
+            int samples;
+
+            samples = hfp_msbc_num_audio_samples_per_frame();
+            if ((samples <= 0) || (samples > (int)BT_HFP_HF_SCO_TX_PCM_SAMPLES))
+            {
+                break;
+            }
+
+            bt_hfp_hf_read_mic_pcm(bt_hfp_hf_sco_tx_pcm, (uint16_t)samples);
+            hfp_msbc_encode_audio_frame(bt_hfp_hf_sco_tx_pcm);
+            attempts++;
+        }
+
+        if (hfp_msbc_num_bytes_in_stream() >= (int)payload_len)
+        {
+            hfp_msbc_read_from_stream(bt_hfp_hf_sco_tx_payload, payload_len);
+        }
+    }
+    else if (negotiated_codec == HFP_CODEC_CVSD)
+    {
+        uint16_t samples;
+
+        samples = (uint16_t)(payload_len / 2u);
+        if (samples > BT_HFP_HF_SCO_TX_PCM_SAMPLES)
+        {
+            samples = BT_HFP_HF_SCO_TX_PCM_SAMPLES;
+        }
+        if (samples > 0u)
+        {
+            bt_hfp_hf_read_mic_pcm(bt_hfp_hf_sco_tx_pcm, samples);
+            memcpy(bt_hfp_hf_sco_tx_payload,
+                   bt_hfp_hf_sco_tx_pcm,
+                   (size_t)samples * sizeof(bt_hfp_hf_sco_tx_pcm[0]));
+        }
+    }
+
+    hci_reserve_packet_buffer();
+    sco_packet = hci_get_outgoing_packet_buffer();
+    little_endian_store_16(sco_packet, 0, sco_handle);
+    sco_packet[2] = payload_len;
+    memcpy(&sco_packet[HCI_SCO_HEADER_SIZE], bt_hfp_hf_sco_tx_payload, payload_len);
+
+    if (!bt_hfp_hf_uplink_logged)
+    {
+        bt_hfp_hf_uplink_logged = RT_TRUE;
+        LOG_I("HFP SCO uplink started, sco=0x%04x, payload=%u",
+              sco_handle,
+              payload_len);
+    }
+
+    (void)hci_send_sco_packet_buffer((int)payload_len + (int)HCI_SCO_HEADER_SIZE);
+}
+
 static void bt_hfp_hf_packet_handler(uint8_t packet_type,
                                      uint16_t channel,
                                      uint8_t * packet,
@@ -148,6 +282,7 @@ static void bt_hfp_hf_packet_handler(uint8_t packet_type,
               hfp_subevent_service_level_connection_released_get_acl_handle(packet));
         bt_hfp_hf_acl_handle = HCI_CON_HANDLE_INVALID;
         bt_hfp_hf_sco_handle = HCI_CON_HANDLE_INVALID;
+        bt_hfp_hf_reset_uplink();
         break;
 
     case HFP_SUBEVENT_AUDIO_CONNECTION_ESTABLISHED:     //SCO
@@ -179,6 +314,13 @@ static void bt_hfp_hf_packet_handler(uint8_t packet_type,
                   codec_name,
                   negotiated_codec,
                   sample_rate);
+            bt_hfp_hf_sco_tx_payload_len = 60u;
+            bt_hfp_hf_uplink_logged = RT_FALSE;
+            bt_hfp_hf_rx_logged = RT_FALSE;
+            if (negotiated_codec == HFP_CODEC_MSBC)
+            {
+                hfp_msbc_init();
+            }
         }
         else
         {
@@ -234,6 +376,7 @@ static void bt_hfp_hf_packet_handler(uint8_t packet_type,
         LOG_I("HFP SCO released, sco=0x%04x",
               hfp_subevent_audio_connection_released_get_sco_handle(packet));
         bt_hfp_hf_sco_handle = HCI_CON_HANDLE_INVALID;
+        bt_hfp_hf_reset_uplink();
 
         //switch audio_to_music
         (void)es8311_audio_set_run_mode(ES8311_AUDIO_RUN_MODE_IDLE);
@@ -289,51 +432,62 @@ static void bt_hfp_hf_sco_packet_handler(uint8_t packet_type,
         uint8_t payload_length;
         uint8_t *payload;
 
-        if(negotiated_codec == HFP_CODEC_MSBC)
+        handle_and_flags = little_endian_read_16(packet, 0);
+        sco_handle = READ_SCO_CONNECTION_HANDLE(packet);
+        packet_status = (uint8_t)((handle_and_flags >> 12) & 0x03u);
+        payload_length = packet[2];
+        payload = packet + HCI_SCO_HEADER_SIZE;
+
+        if (sco_handle != bt_hfp_hf_sco_handle)
         {
-            handle_and_flags = little_endian_read_16(packet, 0);
-            sco_handle = READ_SCO_CONNECTION_HANDLE(packet);
-            packet_status = (handle_and_flags >> 12) & 0x03u;
-            payload_length = packet[2];
-            payload = packet + HCI_SCO_HEADER_SIZE; //skip header
-
-            if (bt_hfp_hf_sco_handle == sco_handle)
-            {
-                //put into msbc_decoder
-                sco_sbc_decoder->decode_signed_16(&sco_sbc_decoder_context,
-                                                packet_status,
-                                                payload,
-                                                payload_length);
-
-            }
-        }else if(negotiated_codec == HFP_CODEC_CVSD)
+            break;
+        }
+        if ((payload_length > 0u) &&
+            ((uint16_t)payload_length + HCI_SCO_HEADER_SIZE > size))
         {
-            handle_and_flags = little_endian_read_16(packet, 0);
-            sco_handle = READ_SCO_CONNECTION_HANDLE(packet);
-            packet_status = (handle_and_flags >> 12) & 0x03u;
-            payload_length = packet[2];
-            payload = packet + HCI_SCO_HEADER_SIZE; //skip header
-
-            if (bt_hfp_hf_sco_handle == sco_handle)
-            {
-                //put into ringbuffer
-                (void)rt_ringbuffer_put(&sco_playback_ringbuffer,
-                                        payload,
-                                        payload_length);
-            }
+            break;
         }
 
+        if ((payload_length > 0u) && (negotiated_codec == HFP_CODEC_MSBC))
+        {
+            sco_sbc_decoder->decode_signed_16(&sco_sbc_decoder_context,
+                                              packet_status,
+                                              payload,
+                                              payload_length);
+        }
+        else if ((payload_length > 0u) && (negotiated_codec == HFP_CODEC_CVSD))
+        {
+            (void)rt_ringbuffer_put(&sco_playback_ringbuffer,
+                                    payload,
+                                    payload_length);
+        }
 
-
-
+        /* One received SCO packet grants one uplink packet, including a
+         * header-only packet. The stack may emit CAN_SEND_NOW before return. */
+        if (payload_length > 0u)
+        {
+            bt_hfp_hf_sco_tx_payload_len = payload_length;
+        }
+        else if (bt_hfp_hf_sco_tx_payload_len == 0u)
+        {
+            bt_hfp_hf_sco_tx_payload_len = 60u;
+        }
+        if (!bt_hfp_hf_rx_logged)
+        {
+            bt_hfp_hf_rx_logged = RT_TRUE;
+            LOG_I("HFP SCO rx, payload=%u, uplink=%u",
+                  payload_length,
+                  bt_hfp_hf_sco_tx_payload_len);
+        }
+        hci_request_sco_can_send_now_event_for_con_handle(sco_handle);
         break;
 
     case HCI_EVENT_PACKET:
         if ((size >= 4u) &&
-            (hci_event_packet_get_type(packet) == HCI_EVENT_SCO_CAN_SEND_NOW))
+            (hci_event_packet_get_type(packet) == HCI_EVENT_SCO_CAN_SEND_NOW) &&
+            (hci_event_sco_can_send_now_get_handle(packet) == bt_hfp_hf_sco_handle))
         {
-            LOG_I("HFP SCO can send now, sco=0x%04x",
-                  (unsigned int)hci_event_sco_can_send_now_get_handle(packet));
+            bt_hfp_hf_send_uplink_packet();
         }
         break;
 

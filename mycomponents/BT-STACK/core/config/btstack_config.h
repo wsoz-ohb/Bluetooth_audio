@@ -78,6 +78,14 @@
 #define ENABLE_SCO_OVER_HCI
 #endif
 
+#if BT_CFG_ENABLE_HCI_CONTROLLER_TO_HOST_FLOW_CONTROL
+#define ENABLE_HCI_CONTROLLER_TO_HOST_FLOW_CONTROL
+#define HCI_HOST_ACL_PACKET_LEN             BT_CFG_HCI_HOST_ACL_PACKET_LEN
+#define HCI_HOST_ACL_PACKET_NUM             BT_CFG_HCI_HOST_ACL_PACKET_NUM
+#define HCI_HOST_SCO_PACKET_LEN             BT_CFG_HCI_HOST_SCO_PACKET_LEN
+#define HCI_HOST_SCO_PACKET_NUM             BT_CFG_HCI_HOST_SCO_PACKET_NUM
+#endif
+
 // ---------------------------------------------------------------------------
 // 日志
 // ---------------------------------------------------------------------------
