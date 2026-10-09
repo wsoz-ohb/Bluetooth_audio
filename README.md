@@ -8,14 +8,27 @@
 
 这是一个基于 RT-Thread 的 Bluetooth Classic 音箱 MCU 固件工程。STM32 运行 BTstack Host，ESP32 仅作为蓝牙控制器，通过 HCI UART 与 STM32 通信；音频由 STM32 解码后交给 ES8311 播放，而不是由 ESP32 直接播放。
 
-本仓库实现了蓝牙播放、AVRCP 播控、LVGL 播放界面、片外 Flash 字库，以及 PTT（按住说话）串口音频和 SPP OTA 的 MCU 侧接入。**下载本仓库不等于获得完整 AI 音箱部署包或完整 OTA 系统。**
+本仓库实现了蓝牙播放、AVRCP 播控、HFP 免提通话音频、LVGL 播放界面、片外 Flash 字库，以及 PTT（按住说话）串口音频和 SPP OTA 的 MCU 侧接入。HFP 目前只打通 SCO 音频，接听和挂断仍在手机上操作。**下载本仓库不等于获得完整 AI 音箱部署包或完整 OTA 系统。**
+
+## 项目状态
+
+| 模块 | 当前状态 | 说明 |
+| --- | --- | --- |
+| Bluetooth Classic | 已接入 | A2DP Sink、AVRCP CT/TG、HFP HF、SPP；由外置 ESP32 提供 Controller |
+| 蓝牙音频播放 | 已接入 | SBC 非分片包解码、44.1 kHz Mixer、I2S DMA 输出 |
+| HFP 通话 | 已接入 | CVSD/mSBC SCO 音频路由；通话控制仍在手机侧 |
+| AI 语音 | MCU 接口已接入 | Orange Pi 服务、模型和部署脚本不在本仓库 |
+| SPP OTA | 应用侧已接入 | 独立 Bootloader 和上位机发送端不在本仓库 |
+| 构建方式 | Studio 工程配置存在 | 建议使用 RT-Thread Studio；SCons 文件目前不是完整构建入口 |
+
+文档中的“已接入”表示代码和工程配置已包含对应路径；是否在某块具体硬件上通过完整回归，还需要按“首次烧录与使用”中的顺序实测。
 
 ## 仓库范围与外部依赖
 
 | 内容 | 本仓库提供 | 需要另行准备 |
 | --- | --- | --- |
 | MCU 应用 | RT-Thread、板级驱动、音频/蓝牙/GUI 应用及 Studio 工程配置 | 对应硬件、ARM GCC 工具链与烧录器 |
-| 蓝牙控制器 | STM32 侧 HCI H4 传输与 ESP32 适配代码 | ESP32 上支持 Classic Bluetooth、HCI H4 和 RTS/CTS 的匹配控制器固件；不能用普通 AT 固件替代 |
+| 蓝牙控制器 | STM32 侧 HCI H4 传输与 ESP32 适配代码 | ESP32 上支持 Classic Bluetooth、HCI H4 和 RTS/CTS 的匹配控制器固件；HFP 还要求 SCO 走 HCI。不能用普通 AT 固件替代 |
 | AI 语音 | 麦克风 PCM 上行、回复 PCM 接收和播放 | Orange Pi 端服务、模型、运行环境及串口收发实现 |
 | OTA | SPP 接收协议、镜像校验、FAL/BCB 适配和试运行确认 | 兼容的独立 Bootloader，以及按协议发送固件的上位机 |
 | 中文字库 | 字库生成与 YMODEM 烧录工具 | 合法授权的字体文件、生成后单独烧录的字库 |
@@ -26,6 +39,7 @@
 
 - **A2DP Sink**：手机或电脑发送 SBC，BT-STACK 解码为 44.1 kHz PCM，经 Mixer、I2S2 DMA 和 ES8311 播放。
 - **AVRCP Controller/Target**：按键和编码器控制播放、暂停、下一首和音量；读取歌名、歌手、时长、进度与播放状态。上一首接口已存在，但当前没有绑定实体按键。
+- **HFP HF**：注册免提服务 `WSOZ Hands-Free`。手机建立 SCO 后，以 CVSD 8 kHz 或 mSBC 16 kHz 全双工播放和送麦。本机没有接听、挂断和通话界面，也没有回声消除。
 - **LVGL 播放页**：Welcome 启动页、中文歌名/歌手、进度条、状态文案和旋转唱片动画。
 - **PTT AI 音频链路**：长按 PC9 采集 ES8311 麦克风 PCM，经 USART3 发送给香橙派；松开后 USART3 接收回复裸 PCM，进入 Mixer 的语音通道播放。背景蓝牙音乐在回复期间自动 Duck。
 - **W25Q128 Flash**：SFUD + FAL；`font` 分区运行时读取 ZBFT 中文字库，`filesystem` 分区挂载 littlefs 保存录音文件。
@@ -37,7 +51,8 @@
 ```text
 手机 / PC
   ├─ A2DP (SBC) ─┐
-  └─ AVRCP       │
+  ├─ AVRCP       │
+  └─ HFP HF/SCO  │
                  v
         ESP32 Controller
         HCI H4 / uart2 / 921600 / RTS-CTS
@@ -45,6 +60,8 @@
                  v
 STM32F407 + RT-Thread + BT-STACK Host
   ├─ SBC 解码 ──> audio_mixer ──> I2S2 DMA ──> ES8311 ──> 喇叭
+  ├─ HFP SCO ──> CVSD PCM / mSBC 解码 ──> I2S2 全双工 ──> ES8311
+  │              麦克风 PCM ──> CVSD / mSBC ──> SCO 上行
   ├─ AVRCP 元数据 ──> LVGL / ST7789
   ├─ PTT 采集 ──> uart3 / 2Mbps ──> Orange Pi 5
   ├─ uart3 回复 PCM ──> audio_mixer VOICE ──> ES8311
@@ -60,7 +77,7 @@ sfud_app_init
   -> fs_app_init（littlefs 挂载，失败不阻断音箱主链）
   -> es8311_audio_init / audio_mixer_init
   -> boot_prompt_play_once
-  -> bt__init（A2DP Sink、AVRCP、SPP）
+  -> bt__init（A2DP Sink、AVRCP、HFP HF、SPP）
   -> boot_ota_init
   -> control_app_init
   -> 延时 3 秒确认试运行镜像
@@ -68,6 +85,62 @@ sfud_app_init
 ```
 
 LVGL 线程由组件自动启动，创建显示端口、字库索引和 Welcome/Main 页面。试运行确认以核心初始化函数返回成功和延时为条件，不代表已完成蓝牙连接、实际出声或 AI 往返测试。
+
+### 核心源码导航
+
+| 文件 | 职责 |
+| --- | --- |
+| [applications/main.c](applications/main.c) | 应用入口、初始化顺序和 OTA 健康确认 |
+| [applications/bt_app.c](applications/bt_app.c) | BTstack Port、A2DP/AVRCP/HFP/SPP 的统一启动顺序 |
+| [applications/bt_a2dp_sink_app.c](applications/bt_a2dp_sink_app.c) | A2DP Sink、媒体 gate 和播放会话管理 |
+| [applications/bt_a2dp_audio.c](applications/bt_a2dp_audio.c) | RTP/SBC 头解析、SBC 解码和 PCM 写入 Mixer |
+| [applications/bt_avrcp_ct_app.c](applications/bt_avrcp_ct_app.c) | AVRCP Controller/Target、元数据、进度和绝对音量 |
+| [applications/bt_hfp_hf_app.c](applications/bt_hfp_hf_app.c) | HFP Hands-Free、SCO 收发和 CVSD/mSBC 音频路由 |
+| [applications/bt_spp_app.c](applications/bt_spp_app.c) | SPP RFCOMM 服务、收发环形缓冲和 OTA 数据入口 |
+| [applications/audio_mixer.c](applications/audio_mixer.c) | 背景音乐/语音双源混音、Duck 和背压 |
+| [applications/es8311_audio.c](applications/es8311_audio.c) | ES8311 控制、I2S2 DMA、播放/采集/通话模式切换 |
+| [applications/control_app.c](applications/control_app.c) | PC9 按键、PB6/PB7 编码器和 PTT 状态机 |
+| [applications/uart_send_pcm.c](applications/uart_send_pcm.c) | USART3 PCM 上行、回复 PCM 接收和可选录音落盘 |
+| [applications/gui_main.c](applications/gui_main.c) / [applications/gui_welcome.c](applications/gui_welcome.c) | LVGL 播放页、欢迎页和元数据显示 |
+| [mycomponents/easy_bootloader_app/](mycomponents/easy_bootloader_app/) | SPP OTA 应用侧协议、镜像校验和 BCB 适配 |
+
+建议阅读顺序是 `main.c` -> `bt_app.c` -> 目标 profile -> `es8311_audio.c` / `audio_mixer.c`。蓝牙事件在 BTstack 线程中处理，音频 DMA 回调只负责搬运数据，二者之间通过环形缓冲区和 Mixer 解耦。
+
+## HFP 通话
+
+设备角色是 HFP Hands-Free，不是 Audio Gateway。实现在 [bt_hfp_hf_app.c](applications/bt_hfp_hf_app.c)。`bt__init()` 注册 RFCOMM channel 2 和 SDP 服务 `WSOZ Hands-Free`。当前声明的 HF 特性只有 Codec Negotiation，编解码列表是 CVSD 和 mSBC。
+
+通话控制在手机上。本机单击、双击和长按仍然是播控与 PTT，没有接听、拒接、挂断，也没有来电或通话界面。手机完成拨号或接听并建立 SCO 后，本地才切换音频路由。
+
+SCO 建立后的路径：
+
+1. 先把 ES8311 置为 idle，停掉当前播放或采集。
+2. 播放 renderer 从 Mixer 换成 HFP。下行 PCM 进入 2048 字节 ringbuffer，再扩展成左右声道相同的立体声。
+3. 按协商结果把 I2S 切到 8 kHz（CVSD）或 16 kHz（mSBC），进入 `CALL_DUPLEX`。这一路使用 I2S 全双工 DMA，喇叭和麦克风同时工作。
+4. mSBC 下行用 Bluedroid 解成 16 kHz、单声道、signed int16 PCM。解码器状态放在 CCM 段 `.ccmbss.hfp_sbc_decoder`。当前 CVSD 分支把 SCO payload 按 16-bit little-endian PCM 直接写入播放缓冲，MCU 没有通用 CVSD 比特流解码器，因此必须匹配当前 Controller 的 SCO 数据格式。
+5. 上行由收到的 SCO 包触发：每收到一包请求一次 `SCO_CAN_SEND_NOW`，再从麦克风取最新 PCM。mSBC 编码后发出，CVSD 直接拷贝 16-bit PCM。发送前丢掉过期采集，只保留大约两包。
+
+SCO 释放后，renderer 切回 Mixer，I2S 回到 44.1 kHz 播放。
+
+当前边界：
+
+- 没有 AEC、EC 或 NR。免提时对端可能听到喇叭回声。
+- 进入通话时不发 AVRCP pause，也不关闭 A2DP media gate。通话播放不走 Mixer；手机如果没有暂停音乐，挂断后 A2DP 可能和刚恢复的播放路由重叠。
+- 通话上行使用 ES8311 当前麦克风增益，HFP 不单独设置。驱动默认是 0 dB。PTT 会把它改成 24 dB，结束后不改回。
+- 通话过程中长按 PC9 仍会进入 PTT，和通话全双工抢 I2S。
+
+## HCI 抓包输出
+
+当 [bt_config.h](mycomponents/BT-STACK/core/config/bt_config.h) 中 `BT_CFG_ENABLE_HCI_DUMP` 为 `1` 时，BTstack 会把 HCI Command、ACL、SCO 和 Event 记录封装为 **btsnoop** 字节流，从专用 UART4 发送出去。该接口只发送、不接收，不占用 RT-Thread 的 `uart4` 设备。
+
+| 参数 | 配置 |
+| --- | --- |
+| TX 引脚 | `PC10`（UART4_TX） |
+| 串口格式 | `2,000,000 baud, 8N1, 无流控` |
+| 缓冲 | 4 KiB 环形缓冲；写满时丢弃后续记录 |
+| 实现 | [hci_dump_uart4_rtthread.c](mycomponents/BT-STACK/port/hci_dump_uart4_rtthread.c) |
+
+使用时将 PC10 接到 USB-UART 的 RX，按原始二进制保存串口数据，并保留 btsnoop 文件头；不要用 `uart1` 控制台终端打开该端口，也不要把这路输出当作可读日志。抓包文件可交给 Wireshark 或仓库外部的解析/桥接工具分析。若不需要抓包，可将 `BT_CFG_ENABLE_HCI_DUMP` 设为 `0`，避免额外的 UART4 初始化和线程开销。
 
 ## OTA 说明
 
@@ -134,9 +207,10 @@ ASR、LLM 和 TTS 的选型不属于 MCU 串口协议；可以替换为其他实
 
 | 资源 | 用途 |
 | --- | --- |
-| `uart1` | 控制台、msh、YMODEM 字库升级 |
-| `uart2` | ESP32 HCI H4，921600，硬件流控 |
-| `uart3` | PTT 上行与 AI 回复下行，2 Mbps，无流控 |
+| `uart1`（PA9/PA10） | 控制台、msh、YMODEM 字库升级 |
+| `uart2`（PA2/PA3；RTS/CTS=PA0/PA1） | ESP32 HCI H4，921600，8N1，硬件流控 |
+| `uart3`（PD8/PB11） | PTT 上行与 AI 回复下行，2 Mbps，无流控 |
+| `UART4_TX`（PC10） | BTstack btsnoop HCI 抓包输出，2 Mbps，只发送；由 HAL 直接初始化 |
 | `I2C1`（软件） | ES8311，SCL=PC11，SDA=PC12 |
 | `I2S2 + DMA` | ES8311 播放/采集 |
 | `SPI1` | ST7789 CS=PC4；W25Q128 CS=PA4；SCK/MISO/MOSI=PA5/PA6/PA7 |
@@ -165,7 +239,8 @@ ASR、LLM 和 TTS 的选型不属于 MCU 串口协议；可以替换为其他实
 4. 连接 `uart1` 控制台，检查 Flash、音频、蓝牙和控制线程启动日志；运行 `sfud_app_info`、`fs_app_info` 和 `font_info` 检查状态。
 5. 按 [字库工具说明](fontlib/README.md) 生成并烧录 ZBFT 字库。仓库忽略 `*.bin`，首次下载后不要假定已有 `font.bin`；字体授权也需单独确认。
 6. 手机或电脑搜索蓝牙设备 **`WSOZ`** 并连接，播放音乐，检查声音、歌曲信息与进度显示。名称由 [bt_config.h](mycomponents/BT-STACK/core/config/bt_config.h) 配置。
-7. 基础播放正常后，再分别联调 PTT 外部服务和 SPP OTA。升级验证至少覆盖传输 ACK、重启、试运行确认、版本/日期查询和失败回滚。
+7. 音乐正常后，用已连接的手机拨打或接听电话。日志出现 `HFP SCO connected` 后应切到通话音频；挂断后回到 44.1 kHz 播放。接听和挂断在手机上操作。
+8. 播放和通话确认后，再分别联调 PTT 外部服务和 SPP OTA。升级验证至少覆盖传输 ACK、重启、试运行确认、版本/日期查询和失败回滚。
 
 当前实体操作以 [control_app.c](applications/control_app.c) 为准：
 
@@ -176,6 +251,8 @@ ASR、LLM 和 TTS 的选型不属于 MCU 串口协议；可以替换为其他实
 | 长按 PC9，保持按住 | 进入 PTT 采集 |
 | 长按后松开 PC9 | 停止采集，开启回复 PCM 接收 |
 | 旋转 PB6/PB7 编码器 | 音量增减；采集期间忽略调音量 |
+
+通话中的单击、双击和长按仍是上表里的播控与 PTT，不是接听或挂断。
 
 ## 常用命令
 
@@ -192,7 +269,7 @@ ASR、LLM 和 TTS 的选型不属于 MCU 串口协议；可以替换为其他实
 ## 目录索引
 
 ```text
-applications/                         应用入口、蓝牙、音频、GUI、文件系统
+applications/                         应用入口、A2DP/AVRCP/HFP/SPP、音频、GUI、文件系统
 mycomponents/BT-STACK/                BTstack Host、RT-Thread port、ESP32 chipset
 mycomponents/easy_bootloader_app/     SPP OTA 应用侧协议与 FAL/BCB 适配
 mycomponents/es8311/                  ES8311 驱动
@@ -201,7 +278,7 @@ mycomponents/keyboard/                按键和编码器
 packages/LVGL-v8.3.11/                LVGL GUI
 packages/littlefs-v2.5.0/             littlefs
 fontlib/                               字库生成与烧录工具
-docs/lvgl_chinese_font_design.md      中文字体设计说明
+mycomponents/BT-STACK/USAGE.md        BTstack Profile 接入说明
 linkscripts/STM32F407VG/link.lds      应用 Flash/RAM/CCM 布局
 ```
 
@@ -210,14 +287,15 @@ linkscripts/STM32F407VG/link.lds      应用 Flash/RAM/CCM 布局
 1. A2DP SBC fragmentation 尚未重组，部分源端可能丢包或卡顿。
 2. PTT 仍采用裸 PCM 和空闲超时，暂时没有序号、长度、CRC 和明确结束帧。
 3. Orange Pi 服务和独立 Bootloader 不在本仓库内，完整 AI 对话与 OTA 回滚需要配套工程及实机验证。
-4. 播放与采集是互斥会话，当前没有全双工回声消除。
+4. PTT 的播放与采集仍是互斥会话。HFP 通话使用 I2S 全双工，但没有回声消除。
 5. LCD 与 W25Q128 共用 SPI1，刷屏无 DMA；42 MHz 不稳定时应降到 30/20 MHz。
-6. HFP/HSP、BLE 业务和触摸屏播控未接入；littlefs 目前主要用于 PTT 录音验证。
+6. 没有 HSP、本机通话控制、通话界面、BLE 业务和触摸屏播控。通话中也不会暂停 A2DP。littlefs 目前主要用于 PTT 录音验证。
 7. AVRCP 元数据按 UTF-8 显示，源端编码异常时可能出现乱码。
 
 ## 进一步阅读
 
-- [中文字体设计](docs/lvgl_chinese_font_design.md)
 - [字库生成与烧录工具](fontlib/README.md)
 - [录音文件提取工具](tools/README.md)：需先开启录音落盘，且独占控制台串口。
 - [BTstack 组件说明](mycomponents/BT-STACK/README.md)
+- [BTstack Profile 使用手册](mycomponents/BT-STACK/USAGE.md)
+- [Ellisys HCI Bridge 工具](tools/ellisys_hci_bridge/README.md)
